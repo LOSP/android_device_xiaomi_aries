@@ -123,8 +123,6 @@ lib/libstagefright_hdcp.so
 lib/libxml.so
 vendor/firmware/a300_pfp.fw
 vendor/firmware/a300_pm4.fw
-vendor/firmware/bcm2079x_firmware.ncd
-vendor/firmware/bcm2079x_pre_firmware.ncd
 vendor/firmware/discretix/dxhdcp2.b00
 vendor/firmware/discretix/dxhdcp2.b01
 vendor/firmware/discretix/dxhdcp2.b02
