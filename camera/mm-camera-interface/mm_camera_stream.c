@@ -259,24 +259,6 @@ int32_t mm_camera_util_s_ctrl( int32_t fd,  uint32_t id, int32_t value)
     return rc;
 }
 
-int32_t mm_camera_util_private_s_ctrl(int32_t fd,  uint32_t id, int32_t value)
-{
-    int rc = MM_CAMERA_OK;
-    struct msm_camera_v4l2_ioctl_t v4l2_ioctl;
-
-    memset(&v4l2_ioctl, 0, sizeof(v4l2_ioctl));
-    v4l2_ioctl.id = id;
-    v4l2_ioctl.ioctl_ptr = value;
-    rc = ioctl (fd, MSM_CAM_V4L2_IOCTL_PRIVATE_S_CTRL, &v4l2_ioctl);
-
-    if(rc) {
-        CDBG_ERROR("%s: fd=%d, S_CTRL, id=0x%x, value = 0x%x, rc = %ld\n",
-                 __func__, fd, id, (uint32_t)value, rc);
-        rc = MM_CAMERA_E_GENERAL;
-    }
-    return rc;
-}
-
 int32_t mm_camera_util_g_ctrl( int32_t fd, uint32_t id, int32_t *value)
 {
     int rc = MM_CAMERA_OK;
@@ -308,16 +290,13 @@ static uint32_t mm_camera_util_get_v4l2_fmt(cam_format_t fmt,
         *num_planes = 2;
         break;
     case CAMERA_BAYER_SBGGR10:
+    case CAMERA_RDI:
         val= V4L2_PIX_FMT_SBGGR10;
         *num_planes = 1;
         break;
     case CAMERA_YUV_422_NV61:
         val= V4L2_PIX_FMT_NV61;
         *num_planes = 2;
-        break;
-    case CAMERA_YUV_422_YUYV:
-        val= V4L2_PIX_FMT_YUYV;
-        *num_planes = 1;
         break;
     case CAMERA_YUV_420_YV12:
         val= V4L2_PIX_FMT_NV12;
@@ -339,6 +318,9 @@ static int mm_camera_stream_util_set_ext_mode(mm_camera_stream_t *stream)
         switch(stream->stream_type) {
         case MM_CAMERA_STREAM_PREVIEW:
             s_parm.parm.capture.extendedmode = MSM_V4L2_EXT_CAPTURE_MODE_PREVIEW;
+            break;
+        case MM_CAMERA_STREAM_RDI0:
+            s_parm.parm.capture.extendedmode = MSM_V4L2_EXT_CAPTURE_MODE_RDI;
             break;
         case MM_CAMERA_STREAM_SNAPSHOT:
             s_parm.parm.capture.extendedmode = MSM_V4L2_EXT_CAPTURE_MODE_MAIN;
@@ -493,6 +475,9 @@ static int mm_camera_stream_util_reg_buf(mm_camera_obj_t * my_obj,
     switch(stream->stream_type) {
     case MM_CAMERA_STREAM_PREVIEW:
       image_type = OUTPUT_TYPE_P;
+      break;
+    case MM_CAMERA_STREAM_RDI0:
+      image_type = OUTPUT_TYPE_R;
       break;
     case MM_CAMERA_STREAM_SNAPSHOT:
     case MM_CAMERA_STREAM_RAW:

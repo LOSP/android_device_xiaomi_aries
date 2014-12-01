@@ -205,6 +205,14 @@ status_t QCameraStream::initChannel(int cameraId,
                                                 preview_notify_cb,
                                                 this);
         ALOGV("Buf notify MM_CAMERA_CH_PREVIEW, rc=%d\n",rc);*/
+    }else if(MM_CAMERA_CH_RDI_MASK & ch_type_mask){
+        rc = cam_ops_ch_acquire(cameraId, MM_CAMERA_CH_RDI);
+        ALOGV("%s:ch_acquire MM_CAMERA_CH_RDI, rc=%d\n",__func__, rc);
+        if(MM_CAMERA_OK != rc) {
+                ALOGE("%s: rdi channel acquir error =%d\n", __func__, rc);
+                ALOGE("%s: X", __func__);
+                return BAD_VALUE;
+        }
     }else if(MM_CAMERA_CH_VIDEO_MASK & ch_type_mask){
         rc = cam_ops_ch_acquire(cameraId, MM_CAMERA_CH_VIDEO);
         ALOGV("%s:ch_acquire MM_CAMERA_CH_VIDEO, rc=%d\n",__func__, rc);
@@ -263,6 +271,7 @@ status_t QCameraStream::setFormat(uint8_t ch_type_mask, cam_format_t previewFmt)
     int height = 0; /* height of channel */
     cam_ctrl_dimension_t dim;
     mm_camera_ch_image_fmt_parm_t fmt;
+    int preview_format, rdi_format;
     ALOGV("%s: E",__func__);
 
     memset(&dim, 0, sizeof(cam_ctrl_dimension_t));
@@ -280,6 +289,13 @@ status_t QCameraStream::setFormat(uint8_t ch_type_mask, cam_format_t previewFmt)
         fmt.def.fmt = (cam_format_t)previewFmt;
         fmt.def.dim.width = dim.display_width;
         fmt.def.dim.height =  dim.display_height;
+    }else if(MM_CAMERA_CH_RDI_MASK & ch_type_mask){
+        fmt.ch_type = MM_CAMERA_CH_RDI;
+        ret = cam_config_get_parm(mCameraId,
+                  MM_CAMERA_PARM_RDI_FORMAT, &rdi_format);
+        fmt.def.fmt = (cam_format_t)rdi_format;
+        fmt.def.dim.width = dim.rdi0_width;
+        fmt.def.dim.height =  dim.rdi0_height;
     }else if(MM_CAMERA_CH_VIDEO_MASK & ch_type_mask){
         fmt.ch_type = MM_CAMERA_CH_VIDEO;
         fmt.video.video.fmt = CAMERA_YUV_420_NV21; //dim.enc_format;

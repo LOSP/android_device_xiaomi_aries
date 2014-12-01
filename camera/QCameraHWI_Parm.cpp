@@ -37,6 +37,8 @@
 #include "linux/msm_mdp.h"
 #include <linux/fb.h>
 #include <limits.h>
+#include <sys/sysinfo.h>
+
 
 extern "C" {
 #include <fcntl.h>
@@ -60,7 +62,6 @@ extern "C" {
 } // extern "C"
 
 #include "QCameraHWI.h"
-#include "QCameraStream.h"
 
 /* QCameraHardwareInterface class implementation goes here*/
 /* following code implements the parameter logic of this class*/
@@ -81,7 +82,7 @@ extern "C" {
 #define MINIMUM_FPS 5
 #define MAXIMUM_FPS 30
 #define DEFAULT_FIXED_FPS 30
-#define DEFAULT_FPS 30
+#define DEFAULT_FPS MAXIMUM_FPS
 
 //Default Picture Width
 #define DEFAULT_PICTURE_WIDTH  640
@@ -138,7 +139,8 @@ static struct camera_size_type zsl_picture_sizes[] = {
 };
 
 static camera_size_type default_picture_sizes[] = {
-  { 4000, 3000}, // 12MP
+  { 4208, 3120}, // 13MP
+  { 4208, 2368}, // 10MP
   { 3264, 2448}, // 8MP
   { 3264, 1836}, // Picture Size to match 1080p,720p AR
   { 3264, 2176}, // Picture Size to match 480p AR
@@ -178,6 +180,8 @@ static const str_map effects[] = {
     { QCameraParameters::EFFECT_SOLARIZE,   CAMERA_EFFECT_SOLARIZE },
     { QCameraParameters::EFFECT_SEPIA,      CAMERA_EFFECT_SEPIA },
     { QCameraParameters::EFFECT_POSTERIZE,  CAMERA_EFFECT_POSTERIZE },
+    { QCameraParameters::EFFECT_WHITEBOARD, CAMERA_EFFECT_WHITEBOARD },
+    { QCameraParameters::EFFECT_BLACKBOARD, CAMERA_EFFECT_BLACKBOARD },
     { QCameraParameters::EFFECT_AQUA,       CAMERA_EFFECT_AQUA },
     { QCameraParameters::EFFECT_EMBOSS,     CAMERA_EFFECT_EMBOSS },
     { QCameraParameters::EFFECT_SKETCH,     CAMERA_EFFECT_SKETCH },
@@ -214,7 +218,6 @@ static const str_map scenemode[] = {
     { QCameraParameters::SCENE_MODE_BACKLIGHT,      CAMERA_BESTSHOT_BACKLIGHT },
     { QCameraParameters::SCENE_MODE_FLOWERS,        CAMERA_BESTSHOT_FLOWERS },
     { QCameraParameters::SCENE_MODE_AR,             CAMERA_BESTSHOT_AR },
-    { QCameraParameters::SCENE_MODE_HDR,            CAMERA_BESTSHOT_AUTO },
 };
 
 static const str_map scenedetect[] = {
@@ -358,10 +361,15 @@ static const str_map zsl_modes[] = {
     { QCameraParameters::ZSL_ON, true },
 };
 
+static const str_map video_hdr_modes[] = {
+    { QCameraParameters::VIDEO_HDR_OFF, false },
+    { QCameraParameters::VIDEO_HDR_ON, true },
+};
 
 static const str_map hdr_bracket[] = {
     { QCameraParameters::AE_BRACKET_HDR_OFF,HDR_BRACKETING_OFF},
     { QCameraParameters::AE_BRACKET_HDR,HDR_MODE },
+    { QCameraParameters::AE_BRACKET,EXP_BRACKETING_MODE }
 };
 
 typedef enum {
@@ -605,6 +613,11 @@ bool QCameraHardwareInterface::supportsRedEyeReduction() {
    return rc;
 }
 
+bool QCameraHardwareInterface::supportsVideoHDR() {
+   bool rc = cam_config_is_parm_supported(mCameraId,MM_CAMERA_PARM_VIDEO_HDR);
+   return rc;
+}
+
 static String8 create_str(int16_t *arr, int length){
     String8 str;
     char buffer[32] = {0};
@@ -755,6 +768,8 @@ void QCameraHardwareInterface::initDefaultParameters()
       mDimension.main_img_format = CAMERA_YUV_420_NV21;
     }
     mDimension.thumb_format    = CAMERA_YUV_420_NV21;
+    mDimension.rdi0_format    = CAMERA_RDI;
+    mDimension.rdi1_format    = CAMERA_RDI;
     ALOGV("%s: main_img_format =%d, thumb_format=%d", __func__,
          mDimension.main_img_format, mDimension.thumb_format);
     mDimension.prev_padding_format = CAMERA_PAD_TO_WORD;
@@ -867,6 +882,9 @@ void QCameraHardwareInterface::initDefaultParameters()
         denoise_value = create_values_str(
             denoise, sizeof(denoise) / sizeof(str_map));
 
+        mVideoHdrValues = create_values_str(
+            video_hdr_modes, sizeof(video_hdr_modes) / sizeof(str_map));
+
        if(supportsFaceDetection()) {
             mFaceDetectionValues = create_values_str(
                 facedetection, sizeof(facedetection) / sizeof(str_map));
@@ -978,7 +996,7 @@ void QCameraHardwareInterface::initDefaultParameters()
     if(mFps >= MINIMUM_FPS && mFps <= MAXIMUM_FPS) {
         mParameters.setPreviewFrameRate(mFps);
     }else{
-        mParameters.setPreviewFrameRate(DEFAULT_FPS);
+        mParameters.setPreviewFrameRate(DEFAULT_FIXED_FPS);
     }
 
     //Set Picture Format
@@ -986,8 +1004,8 @@ void QCameraHardwareInterface::initDefaultParameters()
     mParameters.set(QCameraParameters::KEY_SUPPORTED_PICTURE_FORMATS,
                     mPictureFormatValues);
 
-    mParameters.set(QCameraParameters::KEY_JPEG_QUALITY, "90"); // max quality
-    mJpegQuality = 90;
+    mParameters.set(QCameraParameters::KEY_JPEG_QUALITY, "85"); // max quality
+    mJpegQuality = 85;
     //Set Video Format
     mParameters.set(QCameraParameters::KEY_VIDEO_FRAME_FORMAT, "yuv420sp");
 
@@ -1040,22 +1058,22 @@ void QCameraHardwareInterface::initDefaultParameters()
     if(!rc) {
         ALOGV("%s:LIVESHOT is  not supported", __func__);
         mParameters.set("video-snapshot-supported", "false");
+        mFullLiveshotEnabled = rc;
     } else {
         mParameters.set("video-snapshot-supported", "true");
     }
 
 
     //Set default power mode
-    mParameters.set(QCameraParameters::KEY_POWER_MODE,"Low_Power");
-    //Set Wnr on
-    mParameters.set(QCameraParameters::KEY_DENOISE,true);
+    mParameters.set(QCameraParameters::KEY_POWER_MODE,"Normal_Power");
+
     //Set Camera Mode
-    mParameters.set(QCameraParameters::KEY_CAMERA_MODE,1);
+    mParameters.set(QCameraParameters::KEY_CAMERA_MODE,0);
     mParameters.set(QCameraParameters::KEY_AE_BRACKET_HDR,"Off");
 
     //Set Antibanding
     mParameters.set(QCameraParameters::KEY_ANTIBANDING,
-                    QCameraParameters::ANTIBANDING_AUTO);
+                    QCameraParameters::ANTIBANDING_OFF);
     mParameters.set(QCameraParameters::KEY_SUPPORTED_ANTIBANDING,
                     mAntibandingValues);
 
@@ -1066,7 +1084,7 @@ void QCameraHardwareInterface::initDefaultParameters()
 
     //Set Auto Exposure
     mParameters.set(QCameraParameters::KEY_AUTO_EXPOSURE,
-                    QCameraParameters::AUTO_EXPOSURE_CENTER_WEIGHTED);
+                    QCameraParameters::AUTO_EXPOSURE_FRAME_AVG);
     mParameters.set(QCameraParameters::KEY_SUPPORTED_AUTO_EXPOSURE, mAutoExposureValues);
 
     //Set WhiteBalance
@@ -1181,8 +1199,16 @@ void QCameraHardwareInterface::initDefaultParameters()
     mParameters.set(QCameraParameters::KEY_SKIN_TONE_ENHANCEMENT,
                     QCameraParameters::SKIN_TONE_ENHANCEMENT_DISABLE);
     mParameters.set("skinToneEnhancement", "0");
+    if(cam_config_is_parm_supported(mCameraId, MM_CAMERA_PARM_SCE_FACTOR)){
     mParameters.set(QCameraParameters::KEY_SUPPORTED_SKIN_TONE_ENHANCEMENT_MODES,
                     mSkinToneEnhancementValues);
+    }else{
+    mParameters.set(QCameraParameters::KEY_SUPPORTED_SKIN_TONE_ENHANCEMENT_MODES,
+                    NULL);
+    }
+
+    //Set Skin Beautification
+    mParameters.set("skinBeautification", "0");
 
     //Set Scene Mode
     mParameters.set(QCameraParameters::KEY_SCENE_MODE,
@@ -1195,7 +1221,7 @@ void QCameraHardwareInterface::initDefaultParameters()
 
     //Set Denoise
     mParameters.set(QCameraParameters::KEY_DENOISE,
-                    QCameraParameters::DENOISE_ON);
+                    QCameraParameters::DENOISE_OFF);
     mParameters.set(QCameraParameters::KEY_SUPPORTED_DENOISE,
                         denoise_value);
     //Set Touch AF/AEC
@@ -1204,8 +1230,8 @@ void QCameraHardwareInterface::initDefaultParameters()
     mParameters.set(QCameraParameters::KEY_SUPPORTED_TOUCH_AF_AEC,
                     mTouchAfAecValues);
     /* touch-AF ROI for reducing af fail case */
-    mParameters.set("touchAfAec-dx","200");
-    mParameters.set("touchAfAec-dy","200");
+    mParameters.set("touchAfAec-dx","100");
+    mParameters.set("touchAfAec-dy","100");
 
     //Set Scene Detection
     mParameters.set(QCameraParameters::KEY_SCENE_DETECT,
@@ -1239,6 +1265,14 @@ void QCameraHardwareInterface::initDefaultParameters()
     mParameters.set(QCameraParameters::KEY_SUPPORTED_ZSL_MODES,
                     mZslValues);
 
+    //Set VIDEOHDR
+	if(cam_config_is_parm_supported(mCameraId, MM_CAMERA_PARM_VIDEO_HDR)){
+        mParameters.set(QCameraParameters::KEY_QC_VIDEO_HDR,
+                        QCameraParameters::VIDEO_HDR_OFF);
+        mParameters.set(QCameraParameters::KEY_QC_SUPPORTED_VIDEO_HDR_MODES,
+                        mVideoHdrValues);
+    }
+
     //Set Focal length, horizontal and vertical view angles
     focus_distances_info_t focalLength;
     float horizontalViewAngle = 0.0f;
@@ -1255,12 +1289,6 @@ void QCameraHardwareInterface::initDefaultParameters()
             (void *)&verticalViewAngle);
     mParameters.setFloat(QCameraParameters::KEY_VERTICAL_VIEW_ANGLE,
                     verticalViewAngle);
-
-    //Set Aperture
-    float f_number = 0.0f;
-    cam_config_get_parm(mCameraId, MM_CAMERA_PARM_F_NUMBER,
-            (void *)&f_number);
-    mExifValues.f_number = getRational(f_number*F_NUMBER_DECIMAL_PRECISION, F_NUMBER_DECIMAL_PRECISION);
 
     //Set Exposure Compensation
     mParameters.set(
@@ -1333,10 +1361,6 @@ void QCameraHardwareInterface::initDefaultParameters()
     if (setParameters(mParameters) != NO_ERROR) {
         ALOGE("Failed to set default parameters?!");
     }
-
-    mNoDisplayMode = 0;
-    mLedStatusForZsl = LED_MODE_OFF;
-
     mInitialized = true;
     strTexturesOn = false;
 
@@ -1372,8 +1396,11 @@ status_t QCameraHardwareInterface::setParameters(const QCameraParameters& params
 //    Mutex::Autolock l(&mLock);
     status_t rc, final_rc = NO_ERROR;
 
+    if ((rc = setCameraMode(params)))                   final_rc = rc;
+    if ((rc = setChannelInterfaceMask(params)))         final_rc = rc;
     if ((rc = setPowerMode(params)))                    final_rc = rc;
     if ((rc = setPreviewSize(params)))                  final_rc = rc;
+    if ((rc = setMovieSolid(params)))                   final_rc = rc;
     if ((rc = setVideoSize(params)))                    final_rc = rc;
     if ((rc = setPictureSize(params)))                  final_rc = rc;
     if ((rc = setJpegThumbnailSize(params)))            final_rc = rc;
@@ -1382,6 +1409,8 @@ status_t QCameraHardwareInterface::setParameters(const QCameraParameters& params
     if ((rc = setGpsLocation(params)))                  final_rc = rc;
     if ((rc = setRotation(params)))                     final_rc = rc;
     if ((rc = setZoom(params)))                         final_rc = rc;
+    if ((rc = setWatermark(params)))                    final_rc = rc;
+    if ((rc = setMirror(params)))                       final_rc = rc;
     if ((rc = setOrientation(params)))                  final_rc = rc;
     if ((rc = setLensshadeValue(params)))               final_rc = rc;
     if ((rc = setMCEValue(params)))                     final_rc = rc;
@@ -1390,10 +1419,11 @@ status_t QCameraHardwareInterface::setParameters(const QCameraParameters& params
     if ((rc = setSaturation(params)))                   final_rc = rc;
     if ((rc = setSceneMode(params)))                    final_rc = rc;
     if ((rc = setContrast(params)))                     final_rc = rc;
-//    if ((rc = setFaceDetect(params)))                   final_rc = rc;
+    if ((rc = setFaceDetect(params)))                   final_rc = rc;
     if ((rc = setStrTextures(params)))                  final_rc = rc;
     if ((rc = setPreviewFormat(params)))                final_rc = rc;
     if ((rc = setSkinToneEnhancement(params)))          final_rc = rc;
+    if ((rc = setSkinBeautification(params)))           final_rc = rc;
     if ((rc = setWaveletDenoise(params)))               final_rc = rc;
     if ((rc = setAntibanding(params)))                  final_rc = rc;
     //    if ((rc = setOverlayFormats(params)))         final_rc = rc;
@@ -1440,6 +1470,7 @@ status_t QCameraHardwareInterface::setParameters(const QCameraParameters& params
     // setHighFrameRate needs to be done at end, as there can
     // be a preview restart, and need to use the updated parameters
     if ((rc = setHighFrameRate(params)))  final_rc = rc;
+    if ((rc = setVideoHDR(params)))  final_rc = rc;
     if ((rc = setZSLBurstLookBack(params))) final_rc = rc;
     if ((rc = setZSLBurstInterval(params))) final_rc = rc;
     if ((rc = setNoDisplayMode(params))) final_rc = rc;
@@ -1711,7 +1742,6 @@ status_t  QCameraHardwareInterface::setISOValue(const QCameraParameters& params)
 
             mParameters.set(QCameraParameters::KEY_ISO_MODE, str);
             native_set_parms(MM_CAMERA_PARM_ISO, sizeof(camera_iso_mode_type), (void *)&temp);
-            mIsoValue = (int)temp;
             return NO_ERROR;
         }
     }
@@ -2107,23 +2137,9 @@ status_t QCameraHardwareInterface::setFocusMode(const QCameraParameters& params)
                                       (void *)&value);
 
                 int cafSupport = false;
-                int caf_type=0;
-                const char *str_hdr = mParameters.get(QCameraParameters::KEY_SCENE_MODE);
                 if(!strcmp(str, QCameraParameters::FOCUS_MODE_CONTINUOUS_VIDEO) ||
                    !strcmp(str, QCameraParameters::FOCUS_MODE_CONTINUOUS_PICTURE)){
                     cafSupport = true;
-                    bool rc = false;
-                    if(!strcmp(str, QCameraParameters::FOCUS_MODE_CONTINUOUS_VIDEO))
-                    {
-                        caf_type = 1;
-                        rc = native_set_parms(MM_CAMERA_PARM_CAF_TYPE, sizeof(caf_type), (void *)&caf_type);
-                    }
-                    else if(!strcmp(str, QCameraParameters::FOCUS_MODE_CONTINUOUS_PICTURE))
-                    {
-                        caf_type = 2;
-                        rc = native_set_parms(MM_CAMERA_PARM_CAF_TYPE, sizeof(caf_type), (void *)&caf_type);
-                    }
-                    ALOGV("caf_type %d rc %d", caf_type, rc);
                 }
 
 
@@ -2492,6 +2508,10 @@ status_t QCameraHardwareInterface::setPreviewFrameRateMode(const QCameraParamete
         ALOGV("Preview Frame Rate Mode is NULL\n");
         return NO_ERROR;
     }
+    if( mInitialized && !strcmp(previousMode, str)) {
+        ALOGE("frame rate mode same as previous mode %s", previousMode);
+        return NO_ERROR;
+    }
     int32_t frameRateMode = attr_lookup(frame_rate_modes, sizeof(frame_rate_modes) / sizeof(str_map),str);
     if(frameRateMode != NOT_FOUND) {
         ALOGV("setPreviewFrameRateMode: %s ", str);
@@ -2530,6 +2550,20 @@ status_t QCameraHardwareInterface::setSkinToneEnhancement(const QCameraParameter
           bool ret = native_set_parms(MM_CAMERA_PARM_SCE_FACTOR, sizeof(mSkinToneEnhancement),
                         (void *)&mSkinToneEnhancement);
           return ret ? NO_ERROR : UNKNOWN_ERROR;
+    }
+    return NO_ERROR;
+}
+
+status_t QCameraHardwareInterface::setSkinBeautification(const QCameraParameters& params) {
+    ALOGV("%s",__func__);
+    int skinBeautificationValue = params.getInt("skinBeautification");
+    if(mSkinBeautification != skinBeautificationValue) {
+        ALOGV(" new skin beautification correction value : %d ", skinBeautificationValue);
+        mSkinBeautification = skinBeautificationValue;
+        mParameters.set("skinBeautification", skinBeautificationValue);
+        bool ret = native_set_parms(MM_CAMERA_PARM_SKIN_BEAUTIFICATION, sizeof(mSkinBeautification),
+                      (void *)&mSkinBeautification);
+        return ret ? NO_ERROR : UNKNOWN_ERROR;
     }
     return NO_ERROR;
 }
@@ -2583,18 +2617,41 @@ status_t QCameraHardwareInterface::setVideoSize(const QCameraParameters& params)
         //If application didn't set this parameter string, use the values from
         //getPreviewSize() as video dimensions.
         ALOGV("No Record Size requested, use the preview dimensions");
-        mVideoWidth = mPreviewWidth;
-        mVideoHeight = mPreviewHeight;
+        videoWidth = mPreviewWidth;
+        videoHeight = mPreviewHeight;
     } else {
         //Extract the record witdh and height that application requested.
         ALOGV("%s: requested record size %s", __func__, str);
-        if(!parse_size(str, mVideoWidth, mVideoHeight)) {
+        if(!parse_size(str, videoWidth, videoHeight)) {
             parse_size(str_t, old_vid_w, old_vid_h);
-            if(old_vid_w != mVideoWidth || old_vid_h != mVideoHeight) {
+            if(old_vid_w != videoWidth || old_vid_h != videoHeight) {
                 mRestartPreview = true; 
                 ALOGV("%s: Video sizes changes, Restart preview...", __func__);
             }
             mParameters.set(QCameraParameters::KEY_VIDEO_SIZE, str);
+            //VFE output1 shouldn't be greater than VFE output2.
+            if( (mPreviewWidth > videoWidth) || (mPreviewHeight > videoHeight)) {
+                //Set preview sizes as record sizes.
+                ALOGE("Preview size %dx%d is greater than record size %dx%d,\
+                        resetting preview size to record size",mPreviewWidth,
+                        mPreviewHeight, videoWidth, videoHeight);
+                mPreviewWidth = videoWidth;
+                mPreviewHeight = videoHeight;
+                mParameters.setPreviewSize(mPreviewWidth, mPreviewHeight);
+            }
+
+            if(mIs3DModeOn == true) {
+                /* As preview and video frames are same in 3D mode,
+                 * preview size should be same as video size. This
+                 * cahnge is needed to take of video resolutions
+                 * like 720P and 1080p where the application can
+                 * request different preview sizes like 768x432
+                 */
+                ALOGE("3D mod is on");
+                mPreviewWidth = videoWidth;
+                mPreviewHeight = videoHeight;
+                mParameters.setPreviewSize(mPreviewWidth, mPreviewHeight);
+            }
         } else {
             mParameters.set(QCameraParameters::KEY_VIDEO_SIZE, "");
             ALOGE("%s: error :failed to parse parameter record-size (%s)", __func__, str);
@@ -2602,7 +2659,13 @@ status_t QCameraHardwareInterface::setVideoSize(const QCameraParameters& params)
         }
     }
     ALOGV("%s: preview dimensions: %dx%d", __func__, mPreviewWidth, mPreviewHeight);
-    ALOGV("%s: video dimensions: %dx%d", __func__, mVideoWidth, mVideoHeight);
+    ALOGV("%s: video dimensions: %dx%d", __func__, videoWidth, videoHeight);
+    mDimension.display_width = mPreviewWidth;
+    mDimension.display_height= mPreviewHeight;
+    mDimension.orig_video_width = videoWidth;
+    mDimension.orig_video_height = videoHeight;
+    mDimension.video_width = videoWidth;
+    mDimension.video_height = videoHeight;
 
     ALOGV("%s: X", __func__);
     return NO_ERROR;
@@ -2625,6 +2688,8 @@ status_t QCameraHardwareInterface::setCameraMode(const QCameraParameters& params
 status_t QCameraHardwareInterface::setPowerMode(const QCameraParameters& params) {
     uint32_t value = NORMAL_POWER;
     const char *powermode = NULL;
+    int mNuberOfVFEOutputs;
+    bool ret;
 
     powermode = params.get(QCameraParameters::KEY_POWER_MODE);
     if (powermode != NULL) {
@@ -2642,6 +2707,32 @@ status_t QCameraHardwareInterface::setPowerMode(const QCameraParameters& params)
         }
     }
 
+    ret = cam_config_get_parm(mCameraId, MM_CAMERA_PARM_VFE_OUTPUT_ENABLE, &mNuberOfVFEOutputs);
+    if(ret != MM_CAMERA_OK) {
+        ALOGE("get parm MM_CAMERA_PARM_VFE_OUTPUT_ENABLE  failed");
+        ret = BAD_VALUE;
+    }
+    if(mNuberOfVFEOutputs == 1) { // VFE OUTPUTS = 1 for 7x27A & 8x25 targets
+       struct sysinfo info;
+       uint32_t result;
+       ALOGI("%s: Calling sysinfo() ", __func__);
+       result = sysinfo(&info);
+       if (result) {
+           ALOGE("%s: Problem in reading sysinfo()and so setting LOW POWER MODE", __func__);
+           value = LOW_POWER;
+           mPowerMode = value;
+           mParameters.set(QCameraParameters::KEY_POWER_MODE,"Low_Power");
+       }
+       else {
+           ALOGI("%s: totalram = %ld, freeram = %ld ", __func__, info.totalram, info.freeram );
+           if (info.totalram < 536870912) {  // 512 MB = 536870912
+               ALOGI("Always SET LOW Power Mode for 7x27A/8x25 due to Shortage of memory(RAM < 512 MB)");
+               value = LOW_POWER;
+               mPowerMode = value;
+               mParameters.set(QCameraParameters::KEY_POWER_MODE,"Low_Power");
+           }
+       }
+    } // End of if(nNumberofVFEOutputs == 1)
     ALOGV("%s Low power mode %s value = %d", __func__,
           value ? "Enabled" : "Disabled", value);
     native_set_parms(MM_CAMERA_PARM_LOW_POWER_MODE, sizeof(value),
@@ -2660,23 +2751,12 @@ status_t QCameraHardwareInterface::setPreviewSize(const QCameraParameters& param
     for (size_t i = 0; i <  mPreviewSizeCount; ++i) {
         if (width ==  mPreviewSizes[i].width
            && height ==  mPreviewSizes[i].height) {
-            int old_width, old_height;
-            mParameters.getPreviewSize(&old_width,&old_height);
-            if(width != old_width || height != old_height) {
-                mRestartPreview = true;
-            }
             mParameters.setPreviewSize(width, height);
             ALOGV("setPreviewSize:  width: %d   heigh: %d", width, height);
             mPreviewWidth = width;
             mPreviewHeight = height;
-
-            mDimension.display_width = mPreviewWidth;
-            mDimension.display_height= mPreviewHeight;
-            mDimension.orig_video_width = mPreviewWidth;
-            mDimension.orig_video_height = mPreviewHeight;
-            mDimension.video_width = mPreviewWidth;
-            mDimension.video_height = mPreviewHeight;
-
+            mDimension.display_width = width;
+            mDimension.display_height = height;
             return NO_ERROR;
         }
     }
@@ -2752,6 +2832,25 @@ end:
     return rc;
 }
 
+status_t QCameraHardwareInterface::setMovieSolid(const QCameraParameters& params)
+{
+	if(mVideoHDRMode) {
+		mVideoStabilization = false;
+	}
+	else {
+		const char *value = params.get(QCameraParameters::KEY_VIDEO_STABILIZATION);
+		if(!value) {
+			ALOGE("Invalid movie solid value: %s", "NULL");
+			return 0;
+		}
+
+		mParameters.set(QCameraParameters::KEY_VIDEO_STABILIZATION, value);
+		mVideoStabilization = !strcmp(value, "true");
+	}
+
+    return NO_ERROR;
+}
+
 status_t QCameraHardwareInterface::setJpegThumbnailSize(const QCameraParameters& params){
     int width = params.getInt(QCameraParameters::KEY_JPEG_THUMBNAIL_WIDTH);
     int height = params.getInt(QCameraParameters::KEY_JPEG_THUMBNAIL_HEIGHT);
@@ -2805,7 +2904,7 @@ status_t QCameraHardwareInterface::setPictureSize(const QCameraParameters& param
         return NO_ERROR;
     } else
         ALOGE("Invalid picture size requested: %dx%d", width, height);
-    return BAD_VALUE;
+    return NO_ERROR;
 }
 
 status_t QCameraHardwareInterface::setJpegRotation(int isZsl) {
@@ -2967,7 +3066,6 @@ status_t QCameraHardwareInterface::setFlash(const QCameraParameters& params)
             mParameters.set(QCameraParameters::KEY_FLASH_MODE, str);
             bool ret = native_set_parms(MM_CAMERA_PARM_LED_MODE,
                                        sizeof(value), (void *)&value);
-            mLedStatusForZsl = (led_mode_t)value;
             return ret ? NO_ERROR : UNKNOWN_ERROR;
         }
     }
@@ -3200,6 +3298,12 @@ status_t QCameraHardwareInterface::setAEBracket(const QCameraParameters& params)
             case HDR_MODE:
                 {
                     mHdrMode = HDR_MODE;
+                    temp.hdr_enable= true;
+                    temp.mode = HDR_MODE;
+                    temp.total_frames = 3;
+                    temp.total_hal_frames = getNumOfSnapshots();
+                    ALOGV("%s: setting HDR frames (%d)", __FUNCTION__, temp.total_hal_frames);
+                    native_set_parms(MM_CAMERA_PARM_HDR, sizeof(exp_bracketing_t), (void *)&temp);
                 }
                 break;
             case EXP_BRACKETING_MODE:
@@ -3275,6 +3379,41 @@ status_t QCameraHardwareInterface::setRedeyeReduction(const QCameraParameters& p
         }
     }
     ALOGE("Invalid Redeye Reduction value: %s", (str == NULL) ? "NULL" : str);
+    return BAD_VALUE;
+}
+
+status_t QCameraHardwareInterface::setVideoHDR(const QCameraParameters& params)
+{
+    if(supportsVideoHDR() == false) {
+        ALOGE("Parameter Video HDR is not supported for this sensor");
+        return NO_ERROR;
+    }
+
+    ALOGI("Parameter Video HDR is supported for this sensor");
+    const char *str = params.get(QCameraParameters::KEY_QC_VIDEO_HDR);
+    if (str != NULL) {
+        int value = attr_lookup(video_hdr_modes, sizeof(video_hdr_modes) / sizeof(str_map), str);
+        if (value != NOT_FOUND) {
+            int32_t temp = (int32_t)value;
+            ALOGE("%s: setting Video HDR value of %s", __FUNCTION__, str);
+            mVideoHDRMode = temp;
+            const char *oldHDR = mParameters.get(QCameraParameters::KEY_QC_VIDEO_HDR);
+            if(strcmp(oldHDR, str)) {
+                mParameters.set(QCameraParameters::KEY_QC_VIDEO_HDR, str);
+                if(QCAMERA_HAL_PREVIEW_STARTED == mPreviewState) {
+                    stopPreviewInternal();
+                    mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
+                    native_set_parms(MM_CAMERA_PARM_VIDEO_HDR, sizeof(int32_t), (void *)&temp);
+                    if (startPreview2() == NO_ERROR)
+                        mPreviewState = QCAMERA_HAL_PREVIEW_STARTED;
+                        return NO_ERROR;
+                }
+            }
+            native_set_parms(MM_CAMERA_PARM_VIDEO_HDR, sizeof(int32_t), (void *)&temp);
+            return NO_ERROR;
+        }
+    }
+    ALOGE("Invalid Video HDR value: %s", (str == NULL) ? "NULL" : str);
     return BAD_VALUE;
 }
 
@@ -3394,20 +3533,49 @@ status_t QCameraHardwareInterface::setDenoise(const QCameraParameters& params)
     return BAD_VALUE;
 }
 
+status_t QCameraHardwareInterface::setWatermark(const QCameraParameters& params)
+{
+    ALOGV("%s : E", __func__);
+    status_t rc = NO_ERROR;
+    int32_t value;
+    const char* str;
+
+    str = params.get("watermark");
+    if(str != NULL) {
+	    value = (strcmp(str, "true") == 0)? 1 : 0;
+	    rc = (native_set_parms(MM_CAMERA_PARM_WATERMARK, sizeof(int32_t), (void *)(&value))) ?
+	                            NO_ERROR : UNKNOWN_ERROR;
+    }
+
+    ALOGV("%s : X", __func__);
+    return rc;
+}
+
+status_t QCameraHardwareInterface::setMirror(const QCameraParameters& params)
+{
+    ALOGV("%s : E", __func__);
+    status_t rc = NO_ERROR;
+    int32_t value;
+    const char* str;
+
+    str = params.get("mirror");
+    if(str != NULL) {
+	    value = (strcmp(str, "true") == 0)? 1 : 0;
+	    rc = (native_set_parms(MM_CAMERA_PARM_MIRROR, sizeof(int32_t), (void *)(&value))) ?
+	                            NO_ERROR : UNKNOWN_ERROR;
+    }
+
+    ALOGV("%s : X", __func__);
+    return rc;
+}
+
 status_t QCameraHardwareInterface::setOrientation(const QCameraParameters& params)
 {
     const char *str = params.get("orientation");
+    int val = params.getInt("orientation");
+	if(val<=360)
+		native_set_parms(MM_CAMERA_PARM_ORIENTATION, sizeof(val), &val);
 
-    if (str != NULL) {
-        if (strcmp(str, "portrait") == 0 || strcmp(str, "landscape") == 0) {
-            // Camera service needs this to decide if the preview frames and raw
-            // pictures should be rotated.
-            mParameters.set("orientation", str);
-        } else {
-            ALOGE("Invalid orientation value: %s", str);
-            return BAD_VALUE;
-        }
-    }
     return NO_ERROR;
 }
 
@@ -3438,6 +3606,10 @@ status_t QCameraHardwareInterface::setRecordingHintValue(const int32_t value)
     }
     setDISMode();
     setFullLiveshot();
+
+    if(value) {
+        myMode = (camera_mode_t)(myMode & ~CAMERA_ZSL_MODE);
+    }
     return NO_ERROR;
 }
 
@@ -3489,8 +3661,8 @@ status_t QCameraHardwareInterface::setFullLiveshot()
   uint32_t value = mRecordingHint && mFullLiveshotEnabled
                    && !isLowPowerCamcorder();
 
-  if (((mDimension.picture_width == mVideoWidth) &&
-      (mDimension.picture_height == mVideoHeight))) {
+  if (((mDimension.picture_width == mDimension.video_width) &&
+      (mDimension.picture_height == mDimension.video_height))) {
     /* If video size matches the live snapshot size
      * turn off full size liveshot to get higher fps. */
     value = 0;
@@ -3816,6 +3988,13 @@ status_t QCameraHardwareInterface::setHistogram(int histogram_en)
         return NO_ERROR;
     }
 
+    status_t rc = NO_ERROR;
+	rc = cam_config_is_parm_supported(mCameraId, MM_CAMERA_PARM_HISTOGRAM);
+	if(!rc) {
+		ALOGE(" Histogram is not supported for this");
+		return NO_ERROR;
+	}
+
     mSendData = histogram_en;
     mStatsOn = histogram_en;
     mCurrentHisto = -1;
@@ -3969,42 +4148,6 @@ int QCameraHardwareInterface::getZSLBackLookCount(void) const
     return look_back;
 }
 
-bool QCameraHardwareInterface::getFlashCondition(void)
-{
-    int32_t rc = 0;
-    bool flash_cond = false;
-    aec_info_for_flash_t lowLightForZSL;
-
-    lowLightForZSL.aec_index_for_zsl = 0;
-    lowLightForZSL.zsl_flash_enable = 0;
-
-    if(myMode & CAMERA_ZSL_MODE){
-        switch(mLedStatusForZsl) {
-            case LED_MODE_ON:
-                flash_cond = true;
-                break;
-            case LED_MODE_AUTO:
-                rc = cam_config_get_parm(mCameraId,
-                        MM_CAMERA_GET_PARM_LOW_LIGHT_FOR_ZSL, &lowLightForZSL);
-                if(MM_CAMERA_OK == rc) {
-                    if(lowLightForZSL.zsl_flash_enable != 0)
-                        flash_cond = true;
-                    else
-                        flash_cond = false;
-                }
-                else
-                    ALOGE("%s: Failed to get lowLightForZSL, rc %d", __func__, rc);
-                break;
-             default:
-                break;
-        }
-    }
-
-    ALOGV("%s: myMode %d, flash mode %d, flash condition %d",
-        __func__, myMode, mLedStatusForZsl, flash_cond);
-    return flash_cond;
-}
-
 //EXIF functions
 void QCameraHardwareInterface::deinitExifData()
 {
@@ -4130,11 +4273,7 @@ void QCameraHardwareInterface::initExifData(){
                 3, 1, (void *)mExifValues.gpsTimeStamp);
         ALOGV("EXIFTAGID_GPS_TIMESTAMP set");
     }
-    if(mExifValues.exposure_time.num || mExifValues.exposure_time.denom)
-        addExifTag(EXIFTAGID_EXPOSURE_TIME, EXIF_RATIONAL, 1, 1, (void *)&mExifValues.exposure_time);
 
-    bool flashCondition = getFlashCondition();
-    addExifTag(EXIFTAGID_FLASH, EXIF_SHORT, 1, 1, &flashCondition);
     if (mExifValues.mWbMode == CAMERA_WB_AUTO)
         val_short = 0;
     else
@@ -4166,34 +4305,9 @@ void QCameraHardwareInterface::setExifTags()
 
     mExifValues.focalLength = getRational(focalLengthValue, FOCAL_LENGTH_DECIMAL_PRECISION);
 
-    focus_distances_info_t focusDistances;
-    status_t rc = NO_ERROR;
-    rc = cam_config_get_parm(mCameraId, MM_CAMERA_PARM_FOCAL_LENGTH,(void *)&focusDistances);
-    if (rc == MM_CAMERA_OK){
-        uint16_t temp1;
-        rat_t temp;
-        if(mIsoValue == 0) // ISO is auto
-        {
-            temp1 = (uint16_t)(focusDistances.real_gain + 0.5)*100;
-            mExifValues.isoSpeed = temp1;
-            ALOGV("The new ISO value is %d", temp1);
-        }
-        else{
-            temp1 = iso_speed_values[mIsoValue];
-            mExifValues.isoSpeed = temp1;
-            ALOGV("else The new ISO value is %d", temp1);
-        }
+    //Set ISO Speed
+    mExifValues.isoSpeed = getISOSpeedValue();
 
-        if(focusDistances.exp_time <= 0) // avoid zero-divide problem
-            focusDistances.exp_time = 0.01668; // expoure time will be 1/60 s
-
-        uint16_t temp2 = (uint16_t)(focusDistances.exp_time * 100000);
-        temp2 = (uint16_t)(100000 / temp2);
-        temp.num = 1;
-        temp.denom = temp2;
-        memcpy(&mExifValues.exposure_time, &temp, sizeof(mExifValues.exposure_time));
-        ALOGV(" The exposure value is %f", temp2);
-    }
     //get time and date from system
     time_t rawtime;
     struct tm * timeinfo;
@@ -4370,25 +4484,40 @@ status_t QCameraHardwareInterface::setCAFLockCancel(void)
     return NO_ERROR;
 }
 
-void QCameraHardwareInterface::prepareVideoPicture(bool disable){
-    String8 str;
-    char buffer[32];
+status_t QCameraHardwareInterface::setChannelInterfaceMask(const CameraParameters& params)
+{
+  char prop[PROPERTY_VALUE_MAX];
+  memset(prop, 0, sizeof(prop));
+  property_get("persist.camera.channelstream", prop, "0");
+  int prop_val = atoi(prop);
+  uint32_t channel_stream_info;
 
-    if(disable) {
-        sprintf(buffer, "%dx%d", mDimension.video_width, mDimension.video_height);
-        str.append(buffer);
-
-        mParameters.setPictureSize(mDimension.video_width, mDimension.video_height);
-        mParameters.set(QCameraParameters::KEY_SUPPORTED_PICTURE_SIZES,
-                str.string());
-        ALOGV("%s: Video Picture size supported = %d X %d",
-                __func__,mDimension.video_width,mDimension.video_height);
-    }else{
-        //Set Picture Size
-        mParameters.setPictureSize(mDimension.picture_width, mDimension.picture_height);
-        mParameters.set(QCameraParameters::KEY_SUPPORTED_PICTURE_SIZES,
-                mPictureSizeValues.string());
+  if (prop_val == 0) {
+    const char *str_val  = params.get("channel-stream-num");
+    if(str_val && strlen(str_val) > 0 && (atoi(str_val) <= 2)) {
+      channel_stream_info = atoi(str_val);
+    } else {
+      channel_stream_info = STREAM_IMAGE;
     }
+  } else {
+    channel_stream_info = prop_val;
+  }
+  if (isZSLMode() || (prop_val > 2))
+    channel_stream_info = STREAM_IMAGE;
+
+  if( NO_ERROR != cam_config_set_parm(mCameraId,
+            MM_CAMERA_PARM_CH_INTERFACE, &channel_stream_info)) {
+    ALOGE("%s: MM_CAMERA_PARM_CH_INTERFACE failed", __func__);
+    return FAILED_TRANSACTION;
+  }
+  if( NO_ERROR != cam_config_get_parm(mCameraId,
+            MM_CAMERA_PARM_CH_INTERFACE, &mChannelInterfaceMask)) {
+    ALOGE("%s: MM_CAMERA_PARM_CH_INTERFACE failed", __func__);
+    return FAILED_TRANSACTION;
+  }
+  mParameters.set("channel-stream-num", mChannelInterfaceMask);
+
+  return NO_ERROR;
 }
 
 }; /*namespace android */

@@ -56,13 +56,13 @@ ifeq ($(USE_DEVICE_SPECIFIC_CAMERA),true)
             QCameraHWI.cpp QCameraHWI_Preview.cpp \
             QCameraHWI_Record_7x27A.cpp QCameraHWI_Still.cpp \
             QCameraHWI_Mem.cpp QCameraHWI_Display.cpp \
-            QCameraStream.cpp QualcommCamera2.cpp
+            QCameraStream.cpp QualcommCamera2.cpp QCameraHWI_Rdi.cpp QCameraParameters.cpp
         else
           LOCAL_HAL_FILES := QCameraHAL.cpp QCameraHWI_Parm.cpp\
             QCameraHWI.cpp QCameraHWI_Preview.cpp \
             QCameraHWI_Record.cpp QCameraHWI_Still.cpp \
             QCameraHWI_Mem.cpp QCameraHWI_Display.cpp \
-            QCameraStream.cpp QualcommCamera2.cpp QCameraParameters.cpp
+            QCameraStream.cpp QualcommCamera2.cpp QCameraHWI_Rdi.cpp QCameraParameters.cpp
         endif
 
       else
@@ -106,7 +106,7 @@ ifeq ($(USE_DEVICE_SPECIFIC_CAMERA),true)
          LOCAL_SHARED_LIBRARIES:= libutils libui libcamera_client liblog libcamera_metadata libcutils libmmjpeg
       endif
 
-      LOCAL_SHARED_LIBRARIES+= libgenlock libbinder
+      LOCAL_SHARED_LIBRARIES+= libgenlock libbinder libhardware
       ifneq ($(DLOPEN_LIBMMCAMERA),1)
         LOCAL_SHARED_LIBRARIES+= liboemcamera
       else

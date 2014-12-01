@@ -95,6 +95,7 @@ typedef enum {
     MM_CAMERA_CH_VIDEO,
     MM_CAMERA_CH_SNAPSHOT,
     MM_CAMERA_CH_RAW,
+    MM_CAMERA_CH_RDI,
     MM_CAMERA_CH_MAX
 } mm_camera_channel_type_t;
 
@@ -205,6 +206,7 @@ typedef struct {
 
 typedef enum {
     MM_CAMERA_OPS_PREVIEW,                    // start/stop preview
+    MM_CAMERA_OPS_RDI,                        // start/stop rdi
     MM_CAMERA_OPS_VIDEO,                      // start/stop video
     MM_CAMERA_OPS_PREPARE_SNAPSHOT,           // prepare capture in capture mode
     MM_CAMERA_OPS_SNAPSHOT,                   // take snapshot (HDR,ZSL,live shot)

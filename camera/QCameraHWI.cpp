@@ -127,6 +127,31 @@ int32_t QCameraHardwareInterface::createPreview()
     return ret;
 }
 
+int32_t QCameraHardwareInterface::createRdi()
+{
+    int32_t ret = MM_CAMERA_OK;
+    ALOGV("%s : BEGIN",__func__);
+
+    ALOGE("Mymode Preview = %d",myMode);
+    mStreamRdi = QCameraStream_Rdi::createInstance(mCameraId,
+                                                           myMode);
+    if (!mStreamRdi) {
+        ALOGE("%s: error - can't creat preview stream!", __func__);
+        return BAD_VALUE;
+    }
+
+    mStreamRdi->setHALCameraControl(this);
+
+    /*now init all the buffers and send to steam object*/
+    ret = mStreamRdi->init();
+    if (MM_CAMERA_OK != ret){
+        ALOGE("%s: error - can't init Rdi channel!", __func__);
+        return BAD_VALUE;
+    }
+    ALOGV("%s : END",__func__);
+    return ret;
+}
+
 /* constructor */
 QCameraHardwareInterface::
 QCameraHardwareInterface(int cameraId, int mode)
@@ -139,6 +164,7 @@ QCameraHardwareInterface(int cameraId, int mode)
                     mCallbackCookie(0),
                     //mPreviewHeap(0),
                     mStreamDisplay (NULL), mStreamRecord(NULL), mStreamSnap(NULL),
+                    mStreamRdi(NULL),
                     mFps(0),
                     mDebugFps(0),
                     mMaxZoom(0),
@@ -158,7 +184,7 @@ QCameraHardwareInterface(int cameraId, int mode)
                     mFaceDetectOn(0),
                     mDisEnabled(0),
                     mZoomSupported(false),
-                    mFullLiveshotEnabled(false),
+                    mFullLiveshotEnabled(true),
                     mRecordingHint(false),
                     mAppRecordingHint(false),
                     mStatsOn(0), mCurrentHisto(-1), mSendData(false), mStatHeap(NULL),
@@ -190,9 +216,10 @@ QCameraHardwareInterface(int cameraId, int mode)
                     mReleasedRecordingFrame(false),
                     mStateLiveshot(false),
                     isCameraOpen(false),
-                    mPauseFramedispatch(false),
                     mSnapJpegCbRunning(false),
-                    mSnapCbDisabled(false)
+                    mSnapCbDisabled(false),
+                    mPowerModule(0),
+                    mChannelInterfaceMask(STREAM_IMAGE)
 {
     ALOGV("QCameraHardwareInterface: E");
     int32_t result = MM_CAMERA_E_GENERAL;
@@ -200,7 +227,6 @@ QCameraHardwareInterface(int cameraId, int mode)
 
     pthread_mutex_init(&mAsyncCmdMutex, NULL);
     pthread_cond_init(&mAsyncCmdWait, NULL);
-    mFlashCond = false;
 
     property_get("persist.debug.sf.showfps", value, "0");
     mDebugFps = atoi(value);
@@ -214,7 +240,7 @@ QCameraHardwareInterface(int cameraId, int mode)
     property_get("persist.camera.hal.multitouchaf", value, "0");
     mMultiTouch = atoi(value);
 
-    property_get("persist.camera.full.liveshot", value, "0");
+    property_get("persist.camera.full.liveshot", value, "1");
     mFullLiveshotEnabled = atoi(value);
 
     property_get("persist.camera.hal.dis", value, "0");
@@ -289,14 +315,28 @@ QCameraHardwareInterface(int cameraId, int mode)
         ALOGE("%s X: Failed to create Record Object",__func__);
         return;
     }
+
+    //Rdi
+    result = createRdi();
+    if(result != MM_CAMERA_OK) {
+        ALOGE("%s X: Failed to create Rdi Object",__func__);
+        return;
+    }
     mCameraState = CAMERA_STATE_READY;
-    libdnr = dlopen("libmorpho_noise_reduction.so", RTLD_NOW);
-    if (libdnr) {
-        ALOGV("Open MM camera DL libmorpho_noise_reduction loaded at %p & %p ", libdnr);
-        *(void **)&LINK_morpho_DNR_ProcessFrame = dlsym(libdnr, "LINK_mm_camera_morpho_noise_reduction");
+    libdms = dlopen("libmorpho_moviesolid.so", RTLD_NOW);
+    if (libdms) {
+        ALOGV("Open MM camera DL libmorpho_moviesolid loaded at %p & %p ", libdms);
+        *(void **)&LINK_morpho_MovieSolid_Init = dlsym(libdms, "MovieSolid_Init");
+        *(void **)&LINK_morpho_MovieSolid_Function = dlsym(libdms, "MovieSolid_Function");
+        *(void **)&LINK_morpho_MovieSolid_Finalize = dlsym(libdms, "MovieSolid_Finailze");
     }
     else
-        ALOGE("failed to open libmorpho_noise_reduction");
+        ALOGE("failed to open libmorpho_moviesolid");
+
+    if (hw_get_module(POWER_HARDWARE_MODULE_ID,
+            (const hw_module_t **)&mPowerModule)) {
+        ALOGV("%s module not found", POWER_HARDWARE_MODULE_ID);
+    }
 
     ALOGV("QCameraHardwareInterface: X");
 }
@@ -351,15 +391,20 @@ QCameraHardwareInterface::~QCameraHardwareInterface()
         QCameraStream_Snapshot::deleteInstance (mStreamSnap);
         mStreamSnap = NULL;
     }
-    if (libdnr != NULL) {
-         dlclose(libdnr);
-         libdnr = NULL;
-         ALOGV("closed libmorpho_noise_reduction.so");
+    if (libdms != NULL) {
+         dlclose(libdms);
+         libdms = NULL;
+         ALOGV("closed libmorpho_moviesolid.so");
     }
 
     if (mStreamLiveSnap){
         QCameraStream_Snapshot::deleteInstance (mStreamLiveSnap);
         mStreamLiveSnap = NULL;
+    }
+
+    if (mStreamRdi){
+        QCameraStream_Rdi::deleteInstance (mStreamRdi);
+        mStreamRdi = NULL;
     }
 
     /* Now close the camera after deleting all the instances */
@@ -490,6 +535,19 @@ status_t QCameraHardwareInterface::sendCommand(int32_t command, int32_t arg1,
     Mutex::Autolock l(&mLock);
 
     switch (command) {
+        case CAMERA_CMD_HISTOGRAM_ON:
+            ALOGE("histogram set to on");
+            rc = setHistogram(1);
+            break;
+        case CAMERA_CMD_HISTOGRAM_OFF:
+            ALOGE("histogram set to off");
+            rc = setHistogram(0);
+            break;
+        case CAMERA_CMD_HISTOGRAM_SEND_DATA:
+            ALOGE("histogram send data");
+            mSendData = true;
+            rc = NO_ERROR;
+            break;
         case CAMERA_CMD_START_FACE_DETECTION:
            if(supportsFaceDetection() == false){
                 ALOGE("Face detection support is not available");
@@ -504,22 +562,8 @@ status_t QCameraHardwareInterface::sendCommand(int32_t command, int32_t arg1,
            }
            setFaceDetection("off");
            return runFaceDetection();
-
-    #if 0
-        case CAMERA_CMD_HISTOGRAM_ON:
-            ALOGE("histogram set to on");
-            rc = setHistogram(1);
-            break;
-        case CAMERA_CMD_HISTOGRAM_OFF:
-            ALOGE("histogram set to off");
-            rc = setHistogram(0);
-            break;
-        case CAMERA_CMD_HISTOGRAM_SEND_DATA:
-            ALOGE("histogram send data");
-            mSendData = true;
-            rc = NO_ERROR;
-            break;
-       case CAMERA_CMD_SEND_META_DATA:
+#if 0
+        case CAMERA_CMD_SEND_META_DATA:
            mMetaDataWaitLock.lock();
            if(mFaceDetectOn == true) {
                mSendMetaData = true;
@@ -587,18 +631,18 @@ status_t QCameraHardwareInterface::sendCommand(int32_t command, int32_t arg1,
 void QCameraHardwareInterface::setMyMode(int mode)
 {
     ALOGV("setMyMode: E");
-    //if (mode & CAMERA_SUPPORT_MODE_3D) {
-    //    myMode = CAMERA_MODE_3D;
-    //}else {
+    if (mode & CAMERA_SUPPORT_MODE_3D) {
+        myMode = CAMERA_MODE_3D;
+    }else {
         /* default mode is 2D */
         myMode = CAMERA_MODE_2D;
-    //}
+    }
 
-    //if (mode & CAMERA_SUPPORT_MODE_ZSL) {
-    //    myMode = (camera_mode_t)(myMode |CAMERA_ZSL_MODE);
-    //}else {
+    if (mode & CAMERA_SUPPORT_MODE_ZSL) {
+        myMode = (camera_mode_t)(myMode |CAMERA_ZSL_MODE);
+    }else {
        myMode = (camera_mode_t) (myMode | CAMERA_NONZSL_MODE);
-    //}
+    }
     ALOGV("setMyMode: Set mode to %d (passed mode: %d)", myMode, mode);
     ALOGV("setMyMode: X");
 }
@@ -728,6 +772,26 @@ processPreviewChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb
     return;
 }
 
+void QCameraHardwareInterface::
+processRdiChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *app_cb) {
+    ALOGV("processRdiChannelEvent: E");
+    switch(channelEvent) {
+        case MM_CAMERA_CH_EVT_STREAMING_ON:
+            mCameraState =
+                isZSLMode() ? CAMERA_STATE_ZSL : CAMERA_STATE_PREVIEW;
+            break;
+        case MM_CAMERA_CH_EVT_STREAMING_OFF:
+            mCameraState = CAMERA_STATE_READY;
+            break;
+        case MM_CAMERA_CH_EVT_DATA_DELIVERY_DONE:
+            break;
+        default:
+            break;
+    }
+    ALOGV("processRdiChannelEvent: X");
+    return;
+}
+
 void QCameraHardwareInterface::processRecordChannelEvent(
   mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *app_cb) {
     ALOGV("processRecordChannelEvent: E");
@@ -791,6 +855,9 @@ void QCameraHardwareInterface::processChannelEvent(
         case MM_CAMERA_CH_PREVIEW:
             processPreviewChannelEvent(event->evt, app_cb);
             break;
+        case MM_CAMERA_CH_RDI:
+            processRdiChannelEvent(event->evt, app_cb);
+            break;
         case MM_CAMERA_CH_VIDEO:
             processRecordChannelEvent(event->evt, app_cb);
             break;
@@ -816,16 +883,10 @@ void QCameraHardwareInterface::processCtrlEvent(mm_camera_ctrl_event_t *event, a
         case MM_CAMERA_CTRL_EVT_AUTO_FOCUS_DONE:
             autoFocusEvent(&event->status, app_cb);
             break;
-        case MM_CAMERA_CTRL_EVT_AUTO_FOCUS_MOVE:
-            autoFocusMoveEvent(&event->status, app_cb);
-            break;
         case MM_CAMERA_CTRL_EVT_PREP_SNAPSHOT:
             break;
         case MM_CAMERA_CTRL_EVT_WDN_DONE:
             wdenoiseEvent(event->status, (void *)(event->cookie));
-            break;
-        case MM_CAMERA_CTRL_EVT_HDR_DONE:
-            hdrEvent(event->status, (void *)(event->cookie));
             break;
         case MM_CAMERA_CTRL_EVT_ERROR:
             app_cb->notifyCb  = mNotifyCb;
@@ -833,14 +894,6 @@ void QCameraHardwareInterface::processCtrlEvent(mm_camera_ctrl_event_t *event, a
             app_cb->argm_notify.ext1 = CAMERA_ERROR_UNKNOWN;
             app_cb->argm_notify.cookie =  mCallbackCookie;
             break;
-      case MM_CAMERA_CTRL_EVT_SNAPSHOT_CONFIG_DONE:
-          ALOGV("%s: MM_CAMERA_CTRL_EVT_SNAPSHOT_CONFIG_DONE", __func__);
-          app_cb->notifyCb  = mNotifyCb;
-          app_cb->argm_notify.msg_type = CAMERA_MSG_SHUTTER;
-          app_cb->argm_notify.ext1 = 0;
-          app_cb->argm_notify.ext2 = true;
-          app_cb->argm_notify.cookie =  mCallbackCookie;
-          mShutterSoundPlayed = true;
        default:
             break;
     }
@@ -861,7 +914,6 @@ void  QCameraHardwareInterface::processStatsEvent(
 
         case MM_CAMERA_STATS_EVT_HISTO:
         {
-        #if 0
             ALOGE("HAL process Histo: mMsgEnabled=0x%x, mStatsOn=%d, mSendData=%d, mDataCb=%p ",
             (mMsgEnabled & CAMERA_MSG_STATS_DATA), mStatsOn, mSendData, mDataCb);
             int msgEnabled = mMsgEnabled;
@@ -886,7 +938,6 @@ void  QCameraHardwareInterface::processStatsEvent(
                 app_cb->argm_data_cb.metadata = NULL;
                 app_cb->argm_data_cb.cookie =  mCallbackCookie;
             }
-        #endif
             break;
 
         }
@@ -1015,15 +1066,6 @@ status_t QCameraHardwareInterface::startPreview()
 
     ALOGV("%s: mPreviewState =%d", __func__, mPreviewState);
     Mutex::Autolock lock(mLock);
-
-    if(mPauseFramedispatch){
-        //In ZSL case after snapshot we need to restart
-        //if stop preview not issued.
-        stopPreviewInternal();
-        mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
-        mPauseFramedispatch = false;
-    }
-
     switch(mPreviewState) {
     case QCAMERA_HAL_PREVIEW_STOPPED:
     case QCAMERA_HAL_TAKE_PICTURE:
@@ -1031,7 +1073,8 @@ status_t QCameraHardwareInterface::startPreview()
         ALOGV("%s:  HAL::startPreview begin", __func__);
 
         if(QCAMERA_HAL_PREVIEW_START == mPreviewState &&
-           (mPreviewWindow || isNoDisplayMode())) {
+           (mPreviewWindow || isNoDisplayMode() ||
+               (getChannelInterface() == STREAM_RAW))) {
             ALOGD("%s:  start preview now", __func__);
             retVal = startPreview2();
             if(retVal == NO_ERROR)
@@ -1063,28 +1106,10 @@ status_t QCameraHardwareInterface::startPreview2()
     mm_camera_dimension_t maxDim;
     bool initPreview = false;
 
-    mPauseFramedispatch = false;
     if (mPreviewState == QCAMERA_HAL_PREVIEW_STARTED) { //isPreviewRunning()){
         ALOGE("%s:Preview already started  mCameraState = %d!", __func__, mCameraState);
         ALOGV("%s: X", __func__);
         return NO_ERROR;
-    }
-
-    const char *str = mParameters.get(QCameraParameters::KEY_SCENE_MODE);
-
-    if (mRecordingHint || mFlashCond || !strcmp(str, "hdr")) {
-        ALOGI("%s:Setting non-ZSL mode",__func__);
-        mParameters.set(QCameraParameters::KEY_CAMERA_MODE, 0);
-        myMode = (camera_mode_t)(myMode & ~CAMERA_ZSL_MODE);
-        mParameters.setPreviewFrameRateMode("frame-rate-auto");
-        setPreviewFrameRateMode(mParameters);
-     } else {
-        ALOGI("%s:Setting ZSL mode",__func__);
-        mParameters.set(QCameraParameters::KEY_CAMERA_MODE, 1);
-        myMode = (camera_mode_t)(myMode | CAMERA_ZSL_MODE);
-        mParameters.setPreviewFrameRateMode("frame-rate-auto");
-        setPreviewFrameRateMode(mParameters);
-
     }
 
     /*  get existing preview information, by qury mm_camera*/
@@ -1126,15 +1151,26 @@ status_t QCameraHardwareInterface::startPreview2()
         /* First check if the picture resolution is the same, if not, change it*/
         getPictureSize(&mPictureWidth, &mPictureHeight);
 
+        /* remember picture size required by ui */
+        mPictureWidth_ui = mPictureWidth;
+        mPictureHeight_ui = mPictureHeight;
+        /* check if picture size is less than video size */
+        if (mPictureWidth < dim.video_width ||
+            mPictureHeight < dim.video_height) {
+            /* picture size can not be less than video size,
+             * if so, need to change picture size to video size*/
+            mPictureWidth = dim.video_width;
+            mPictureHeight = dim.video_height;
+        }
+
         matching = (mPictureWidth == dim.picture_width) &&
             (mPictureHeight == dim.picture_height);
 
         if (!matching) {
             dim.picture_width  = mPictureWidth;
             dim.picture_height = mPictureHeight;
-            //For FullSize snapshot Main image Buffer is used as Thumanail.
-            dim.ui_thumbnail_height = mPictureWidth;
-            dim.ui_thumbnail_width = mPictureHeight;
+            dim.ui_thumbnail_height = dim.display_height;
+            dim.ui_thumbnail_width = dim.display_width;
         }
         ALOGI("%s: Fullsize Liveshaot Picture size to set: %d x %d", __func__,
              dim.picture_width, dim.picture_height);
@@ -1150,15 +1186,11 @@ status_t QCameraHardwareInterface::startPreview2()
     mStreamDisplay->setMode(myMode & CAMERA_ZSL_MODE);
     mStreamSnap->setMode(myMode & CAMERA_ZSL_MODE);
     mStreamRecord->setMode(myMode & CAMERA_ZSL_MODE);
+    mStreamRdi->setMode(myMode & CAMERA_ZSL_MODE);
     ALOGV("%s: myMode = %d", __func__, myMode);
 
     ALOGV("%s: setPreviewWindow", __func__);
     mStreamDisplay->setPreviewWindow(mPreviewWindow);
-    ret = cam_config_set_parm(mCameraId, MM_CAMERA_PARM_INFORM_STARTPRVIEW, NULL);
-    if(ret<0)
-    {
-      ALOGE("%s: Failed to Check MM_CAMERA_PARM_INFORM_STARTPRVIEW, rc %d", __func__, ret);
-    }
 
     if(isZSLMode()) {
         /* Start preview streaming */
@@ -1176,7 +1208,22 @@ status_t QCameraHardwareInterface::startPreview2()
             return BAD_VALUE;
         }
     }else{
-        ret = mStreamDisplay->start();
+        if (mChannelInterfaceMask == STREAM_RAW)
+            ret = mStreamRdi->start();
+        else if (mChannelInterfaceMask == STREAM_IMAGE_AND_RAW) {
+            ret = mStreamDisplay->start();
+            if (MM_CAMERA_OK != ret){
+                ALOGE("%s: X error - can't start stream!", __func__);
+                return BAD_VALUE;
+            }
+            ret = mStreamRdi->start();
+            if (MM_CAMERA_OK != ret){
+                mStreamDisplay->stop();
+                ALOGE("%s: X error - can't start stream!", __func__);
+                return BAD_VALUE;
+            }
+        } else
+            ret = mStreamDisplay->start();
     }
 
     /*call QCameraStream_noneZSL::start() */
@@ -1193,8 +1240,6 @@ status_t QCameraHardwareInterface::startPreview2()
         mPostPreviewHeap.clear();
         mPostPreviewHeap = NULL;
     }
-
-    mRestartPreview = false;
 
     ALOGV("startPreview: X");
     return ret;
@@ -1215,15 +1260,6 @@ void QCameraHardwareInterface::stopPreview()
         mRecordingHint = false;
     }
 
-    const char * str_fd = mParameters.get(QCameraParameters::KEY_FACE_DETECTION);
-    if((str_fd != NULL) && !strcmp(str_fd, "on")){
-        if(supportsFaceDetection() == false){
-         ALOGE("Face detection support is not available");
-        }
-        setFaceDetection("off");
-        runFaceDetection();
-    }
-
     switch(mPreviewState) {
       case QCAMERA_HAL_PREVIEW_START:
           //mPreviewWindow = NULL;
@@ -1238,11 +1274,10 @@ void QCameraHardwareInterface::stopPreview()
             stopPreviewInternal();
             mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
             break;
-    case QCAMERA_HAL_TAKE_PICTURE:
-        cancelPictureInternal();
-        stopPreviewInternal();
-        mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
-        break;
+      case QCAMERA_HAL_TAKE_PICTURE:
+          cancelPictureInternal();
+          mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
+          break;
       case QCAMERA_HAL_PREVIEW_STOPPED:
       default:
             break;
@@ -1276,9 +1311,14 @@ void QCameraHardwareInterface::stopPreviewInternal()
         /* take care snapshot object for ZSL mode */
         mStreamSnap->stop();
     }
-    mStreamDisplay->stop();
+    if (mChannelInterfaceMask == STREAM_RAW)
+        mStreamRdi->stop();
+    else if (mChannelInterfaceMask == STREAM_IMAGE_AND_RAW) {
+        mStreamDisplay->stop();
+        mStreamRdi->stop();
+    } else
+       mStreamDisplay->stop();
 
-    mPauseFramedispatch = false;
     mCameraState = CAMERA_STATE_PREVIEW_STOP_CMD_SENT;
     ALOGV("stopPreviewInternal: X");
 }
@@ -1288,9 +1328,6 @@ int QCameraHardwareInterface::previewEnabled()
     ALOGV("previewEnabled: E");
     Mutex::Autolock lock(mLock);
     ALOGV("%s: mCameraState = %d", __func__, mCameraState);
-    if (mPauseFramedispatch) {
-        return false;
-    }
     switch(mPreviewState) {
     case QCAMERA_HAL_PREVIEW_STOPPED:
     case QCAMERA_HAL_TAKE_PICTURE:
@@ -1324,7 +1361,21 @@ status_t QCameraHardwareInterface::startRecording()
     case QCAMERA_HAL_PREVIEW_STARTED:
         //remember recordinghint value set by app
         mAppRecordingHint = mRecordingHint;
-        pausePreviewForVideo();
+        if (mRecordingHint == false || mRestartPreview) {
+            ALOGE("%s: start recording when hint is false, stop preview first", __func__);
+            stopPreviewInternal();
+            mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
+
+            // Set recording hint to true
+            mRecordingHint = true;
+            setRecordingHintValue(mRecordingHint);
+
+            // start preview again
+            mPreviewState = QCAMERA_HAL_PREVIEW_START;
+            if (startPreview2() == NO_ERROR)
+                mPreviewState = QCAMERA_HAL_PREVIEW_STARTED;
+            mRestartPreview = false;
+        }
         ret =  mStreamRecord->start();
         if (MM_CAMERA_OK != ret){
             ALOGE("%s: error - mStreamRecord->start!", __func__);
@@ -1336,6 +1387,14 @@ status_t QCameraHardwareInterface::startRecording()
         else
             mCameraState = CAMERA_STATE_ERROR;
         mPreviewState = QCAMERA_HAL_RECORDING_STARTED;
+
+        if (mPowerModule) {
+            if (mPowerModule->powerHint) {
+                mPowerModule->powerHint(mPowerModule,
+                    POWER_HINT_VIDEO_ENCODE, (void *)"state=1");
+            }
+        }
+
         break;
     case QCAMERA_HAL_RECORDING_STARTED:
         ALOGV("%s: ", __func__);
@@ -1391,6 +1450,14 @@ void QCameraHardwareInterface::stopRecordingInternal()
     mStreamRecord->stop();
     mCameraState = CAMERA_STATE_PREVIEW;  //TODO : Apurva : Hacked for 2nd time Recording
     mPreviewState = QCAMERA_HAL_PREVIEW_STARTED;
+
+    if (mPowerModule) {
+        if (mPowerModule->powerHint) {
+            mPowerModule->powerHint(mPowerModule,
+                    POWER_HINT_VIDEO_ENCODE, (void *)"state=0");
+        }
+    }
+
     ALOGV("stopRecordingInternal: X");
     return;
 }
@@ -1429,35 +1496,6 @@ void QCameraHardwareInterface::releaseRecordingFrame(const void *opaque)
     mStreamRecord->releaseRecordingFrame(opaque);
     ALOGV("%s : END",__func__);
     return;
-}
-
-status_t QCameraHardwareInterface::autoFocusMoveEvent(cam_ctrl_status_t *status, app_notify_cb_t *app_cb)
-{
-    ALOGV("autoFocusMoveEvent: E");
-    int ret = NO_ERROR;
-
-    isp3a_af_mode_t afMode = getAutoFocusMode(mParameters);
-
-    if (afMode == AF_MODE_CAF && mNotifyCb && ( mMsgEnabled & CAMERA_MSG_FOCUS_MOVE)){
-        ALOGV("%s:Issuing AF Move callback to service",__func__);
-
-        app_cb->notifyCb  = mNotifyCb;
-        app_cb->argm_notify.msg_type = CAMERA_MSG_FOCUS_MOVE;
-        app_cb->argm_notify.ext2 = 0;
-        app_cb->argm_notify.cookie =  mCallbackCookie;
-
-        ALOGV("Auto focus state =%d", *status);
-        if(*status == 1) {
-            app_cb->argm_notify.ext1 = true;
-        }else if(*status == 0){
-            app_cb->argm_notify.ext1 = false;
-        }else{
-            app_cb->notifyCb  = NULL;
-            ALOGE("%s:Unknown AF Move Status received (%d) received",__func__,*status);
-        }
-    }
-    ALOGV("autoFocusMoveEvent: X");
-    return ret;
 }
 
 status_t QCameraHardwareInterface::autoFocusEvent(cam_ctrl_status_t *status, app_notify_cb_t *app_cb)
@@ -1602,7 +1640,22 @@ void QCameraHardwareInterface::pausePreviewForSnapshot()
 status_t QCameraHardwareInterface::resumePreviewAfterSnapshot()
 {
     status_t ret = NO_ERROR;
-    ret = mStreamDisplay->start();
+    if (mChannelInterfaceMask == STREAM_RAW)
+        ret = mStreamRdi->start();
+    else if (mChannelInterfaceMask == STREAM_IMAGE_AND_RAW) {
+        ret = mStreamDisplay->start();
+        if (MM_CAMERA_OK != ret){
+            ALOGE("%s: X error - can't start stream!", __func__);
+            return BAD_VALUE;
+        }
+        ret = mStreamRdi->start();
+        if (MM_CAMERA_OK != ret){
+            mStreamDisplay->stop();
+            ALOGE("%s: X error - can't start stream!", __func__);
+            return BAD_VALUE;
+        }
+    } else
+        ret = mStreamDisplay->start();
     return ret;
 }
 
@@ -1616,12 +1669,62 @@ void liveshot_callback(mm_camera_ch_data_buf_t *recvd_frame,
     status_t ret;
     ALOGV("%s: E", __func__);
 
-    if (!pme->mStateLiveshot) {
-        ALOGE("%s: Returning Buffer. Picture Cancelled", __func__);
-        return;
+    ret = cam_config_get_parm(pme->mCameraId,MM_CAMERA_PARM_VFE_OUTPUT_ENABLE,
+                       &mNuberOfVFEOutputs);
+    if (ret != MM_CAMERA_OK) {
+       ALOGE("get parm MM_CAMERA_PARM_VFE_OUTPUT_ENABLE  failed");
+       cam_evt_buf_done(pme->mCameraId, recvd_frame);
+       return ;
+    }
+
+    mm_camera_ch_data_buf_t* frame =
+         (mm_camera_ch_data_buf_t *)malloc(sizeof(mm_camera_ch_data_buf_t));
+    if (frame == NULL) {
+        ALOGE("%s: Error allocating memory to save received_frame structure.", __func__);
+        cam_evt_buf_done(pme->mCameraId, recvd_frame);
+        return ;
+    }
+    memcpy(frame, recvd_frame, sizeof(mm_camera_ch_data_buf_t));
+
+    if (mNuberOfVFEOutputs == 1)
+        ALOGE("<DEBUG> Liveshot buffer idx:%d",frame->def.idx);
+    else
+        ALOGE("<DEBUG> Liveshot buffer idx:%d",frame->video.video.idx);
+    memset(&dim, 0, sizeof(cam_ctrl_dimension_t));
+    ret = cam_config_get_parm(pme->mCameraId, MM_CAMERA_PARM_DIMENSION, &dim);
+    if (MM_CAMERA_OK != ret) {
+        ALOGE("%s: error - can't get dimension!", __func__);
+        ALOGE("%s: X", __func__);
     }
 
     ALOGV("Live Snapshot Enabled");
+    if (mNuberOfVFEOutputs == 1){
+       frame->snapshot.main.frame = frame->def.frame;
+       frame->snapshot.main.idx = frame->def.idx;
+       frame->snapshot.thumbnail.frame = frame->def.frame;
+       frame->snapshot.thumbnail.idx = frame->def.idx;
+    } else {
+       frame->snapshot.main.frame = frame->video.video.frame;
+       frame->snapshot.main.idx = frame->video.video.idx;
+       frame->snapshot.thumbnail.frame = frame->video.video.frame;
+       frame->snapshot.thumbnail.idx = frame->video.video.idx;
+    }
+
+    dim.picture_width = pme->mDimension.video_width;
+    dim.picture_height = pme->mDimension.video_height;
+    dim.ui_thumbnail_width = pme->mDimension.video_width;
+    dim.ui_thumbnail_height = pme->mDimension.video_height;
+    if (mNuberOfVFEOutputs == 1){
+       dim.main_img_format = pme->mDimension.prev_format;
+       dim.thumb_format = pme->mDimension.prev_format;
+    } else {
+       dim.main_img_format = pme->mDimension.enc_format;
+       dim.thumb_format = pme->mDimension.enc_format;
+    }
+
+    mJpegMaxSize = pme->mDimension.video_width * pme->mDimension.video_width * 1.5;
+
+    ALOGV("Picture w = %d , h = %d, size = %d",dim.picture_width,dim.picture_height,mJpegMaxSize);
     if (pme->mStreamLiveSnap){
         ALOGE("%s:Deleting old Snapshot stream instance",__func__);
         QCameraStream_Snapshot::deleteInstance (pme->mStreamLiveSnap);
@@ -1633,13 +1736,14 @@ void liveshot_callback(mm_camera_ch_data_buf_t *recvd_frame,
 
     if (!pme->mStreamLiveSnap) {
         ALOGE("%s: error - can't creat snapshot stream!", __func__);
-        cam_evt_buf_done(pme->mCameraId, recvd_frame);
         return ;
     }
     pme->mStreamLiveSnap->setModeLiveSnapshot(true);
     pme->mStreamLiveSnap->setHALCameraControl(pme);
+    pme->mStreamLiveSnap->initSnapshotBuffers(&dim,1);
+    ALOGV("Calling live shot");
 
-    ret = ((QCameraStream_Snapshot*)(pme->mStreamLiveSnap))->takePictureLiveshot(recvd_frame);
+    ret = ((QCameraStream_Snapshot*)(pme->mStreamLiveSnap))->takePictureLiveshot(frame,&dim,mJpegMaxSize);
     if (MM_CAMERA_OK != ret) {
         ALOGE("%s: Error : returned from takePictureLiveshot",__func__);
         return;
@@ -1653,12 +1757,10 @@ status_t  QCameraHardwareInterface::takePicture()
 {
     ALOGV("takePicture: E");
     status_t ret = MM_CAMERA_OK;
+    uint32_t stream_info;
     int mNuberOfVFEOutputs = 0;
     Mutex::Autolock lock(mLock);
-    bool hdr;
-    int  frm_num = 1, rc = 0;
-    int  exp[MAX_HDR_EXP_FRAME_NUM];
-	
+
     mSnapJpegCbLock.lock();
     if(mSnapJpegCbRunning==true){ // This flag is set true in snapshot_jpeg_cb
        ALOGE("%s: wait snapshot_jpeg_cb() to finish to proceed with the next take picture", __func__);
@@ -1676,35 +1778,16 @@ status_t  QCameraHardwareInterface::takePicture()
 
     mSnapCbDisabled = false;
 
-    if(QCAMERA_HAL_RECORDING_STARTED != mPreviewState){
-      isp3a_af_mode_t afMode = getAutoFocusMode(mParameters);
-      if (!mFlashCond)
-      {
-        mFlashCond = getFlashCondition();
-      }
-      ALOGV("%s: Flash Contidion %d", __func__, mFlashCond);
-      if(mFlashCond) {
-        mRestartPreview = true;
-        pausePreviewForZSL();
-      }
-      mFlashCond = false;
-    }
-
-    rc = cam_config_set_parm(mCameraId, MM_CAMERA_PARM_LG_CAF_LOCK, NULL);
-    if(rc<0)
-    {
-      ALOGE("%s: Failed to Check MM_CAMERA_PARM_LG_CAF_LOCK, rc %d", __func__, rc);
-    }
-    hdr = getHdrInfoAndSetExp(MAX_HDR_EXP_FRAME_NUM, &frm_num, exp);
-	
     mStreamSnap->resetSnapshotCounters();
-    mStreamSnap->InitHdrInfoForSnapshot(hdr, frm_num, exp);
     switch(mPreviewState) {
     case QCAMERA_HAL_PREVIEW_STARTED:
         //set the fullsize liveshot to false
         mFullLiveshotEnabled = false;
         setFullLiveshot();
         mStreamSnap->setFullSizeLiveshot(false);
+              /*Currently concurrent streaming is not enabled for snapshot
+              So in snapshot mode, we turn of the RDI channel and configure backend
+              for only pixel stream*/
         if (isZSLMode()) {
             if (mStreamSnap != NULL) {
                 pausePreviewForZSL();
@@ -1732,6 +1815,14 @@ status_t  QCameraHardwareInterface::takePicture()
 
         /* stop preview */
         pausePreviewForSnapshot();
+        if (mChannelInterfaceMask != STREAM_IMAGE) {
+          stream_info = STREAM_IMAGE;
+          cam_config_set_parm(mCameraId,
+            MM_CAMERA_PARM_CH_INTERFACE, &stream_info);
+          cam_config_get_parm(mCameraId,
+            MM_CAMERA_PARM_CH_INTERFACE, &stream_info);
+          setChannelInterface(stream_info);
+        }
 
         /* call Snapshot start() :*/
         ret =  mStreamSnap->start();
@@ -1799,8 +1890,8 @@ bool QCameraHardwareInterface::canTakeFullSizeLiveshot() {
 
       /* If Picture size is same as video size, switch to Video size
        * live snapshot */
-      if ((mDimension.picture_width == mVideoWidth) &&
-          (mDimension.picture_height == mVideoHeight)) {
+      if ((mDimension.picture_width == mDimension.video_width) &&
+          (mDimension.picture_height == mDimension.video_height)) {
         return false;
       }
 
@@ -1809,9 +1900,9 @@ bool QCameraHardwareInterface::canTakeFullSizeLiveshot() {
         * less than (video size + 10% DIS Margin)
         * then fall back to Video size liveshot. */
         if ((mDimension.picture_width <
-               (int)(mVideoWidth * 1.1)) ||
+               (int)(mDimension.video_width * 1.1)) ||
              (mDimension.picture_height <
-               (int)(mVideoHeight * 1.1))) {
+               (int)(mDimension.video_height * 1.1))) {
           ret = false;
         } else {
           /* Go with Full size live snapshot. */
@@ -1881,8 +1972,6 @@ status_t QCameraHardwareInterface::autoFocus()
 {
     ALOGV("autoFocus: E");
     status_t ret = NO_ERROR;
-    mFlashCond = getFlashCondition();
-    ALOGV("autoFocus: mFlashCond = %d", mFlashCond);
     Mutex::Autolock lock(mLock);
     ALOGV("autoFocus: Got lock");
     bool status = true;
@@ -2202,8 +2291,8 @@ void QCameraHardwareInterface::dumpFrameToFile(struct msm_frame* newFrame,
             file_fd = open(buf, O_RDWR | O_CREAT, 0777);
             break;
           case HAL_DUMP_FRM_VIDEO:
-            w = mVideoWidth;
-            h = mVideoHeight;
+            w = mDimension.video_width;
+            h = mDimension.video_height;
             snprintf(buf, sizeof(buf),"/data/%dv_%dx%d.yuv", mDumpFrmCnt, w, h);
             file_fd = open(buf, O_RDWR | O_CREAT, 0777);
             break;
@@ -2220,6 +2309,12 @@ void QCameraHardwareInterface::dumpFrameToFile(struct msm_frame* newFrame,
             w = mDimension.ui_thumbnail_width;
             h = mDimension.ui_thumbnail_height;
             snprintf(buf, sizeof(buf),"/data/%dt_%dx%d.yuv", mDumpFrmCnt, w, h);
+            file_fd = open(buf, O_RDWR | O_CREAT, 0777);
+            break;
+          case HAL_DUMP_FRM_RDI:
+            w = mDimension.rdi0_width;
+            h = mDimension.rdi0_height;
+            snprintf(buf, sizeof(buf),"/data/%dr_%dx%d.yuv", mDumpFrmCnt, w, h);
             file_fd = open(buf, O_RDWR | O_CREAT, 0777);
             break;
           default:
@@ -2669,6 +2764,12 @@ void QCameraHardwareInterface::takePicturePrepareHardware()
 {
     ALOGV("%s: E", __func__);
 
+    int value = 0;
+    cam_config_get_parm(mCameraId, MM_CAMERA_PARM_FLL_AF, &value);
+    ALOGV("FLL GET AF:%d ", value);
+    if (value==-1)
+        usleep(500000);
+
     /* Prepare snapshot*/
     cam_ops_action(mCameraId,
                   true,
@@ -2682,6 +2783,16 @@ bool QCameraHardwareInterface::isNoDisplayMode()
   return (mNoDisplayMode != 0);
 }
 
+uint32_t QCameraHardwareInterface::getChannelInterface()
+{
+  return mChannelInterfaceMask;
+}
+
+void QCameraHardwareInterface::setChannelInterface(uint32_t value)
+{
+  mChannelInterfaceMask = value;
+}
+
 void QCameraHardwareInterface::pausePreviewForZSL()
 {
     ALOGV("%s: mRestartPreview %d", __func__, mRestartPreview);
@@ -2691,127 +2802,7 @@ void QCameraHardwareInterface::pausePreviewForZSL()
         mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
         startPreview2();
         mPreviewState = QCAMERA_HAL_PREVIEW_STARTED;
-    }
-}
-
-void QCameraHardwareInterface::pausePreviewForVideo()
-{
-    status_t ret = NO_ERROR;
-    bool restart = false;
-    cam_ctrl_dimension_t dim;
-
-    /*  get existing preview information, by qury mm_camera*/
-    memset(&dim, 0, sizeof(cam_ctrl_dimension_t));
-    ret = cam_config_get_parm(mCameraId, MM_CAMERA_PARM_DIMENSION,&dim);
-
-    if (MM_CAMERA_OK != ret) {
-      ALOGE("%s: X error- can't get preview dimension!", __func__);
-      return;
-    }
-
-    if (mRestartPreview) {
         mRestartPreview = false;
-        ALOGV("%s: Restarting Preview. Video Size changed",__func__);
-        restart |= false;
-    }
-    if (mRecordingHint == false) {
-        ALOGV("%s: Restarting Preview. Hint not set",__func__);
-        restart |= true;
-    }
-
-    if(dim.video_width != mVideoWidth || dim.video_height != mVideoHeight){
-        ALOGV("%s: Restarting Preview. New Video Size set",__func__);
-        restart |= true;
-    }
-
-    //VFE output1 shouldn't be greater than VFE output2.
-    if( (mPreviewWidth > mVideoWidth) || (mPreviewHeight > mVideoHeight)) {
-        //Set preview sizes as record sizes.
-        ALOGV("Preview size %dx%d is greater than record size %dx%d,\
-                resetting preview size to record size",mPreviewWidth,
-                        mPreviewHeight, mVideoWidth, mVideoHeight);
-        mPreviewWidth = mVideoWidth;
-        mPreviewHeight = mVideoHeight;
-        mParameters.setPreviewSize(mPreviewWidth, mPreviewHeight);
-        restart |= true;
-    }
-    if (restart) {
-        stopPreviewInternal();
-        mPreviewState = QCAMERA_HAL_PREVIEW_STOPPED;
-
-        // Set recording hint to true
-        mRecordingHint = true;
-        setRecordingHintValue(mRecordingHint);
-
-        mDimension.display_width = mPreviewWidth;
-        mDimension.display_height= mPreviewHeight;
-        mDimension.orig_video_width = mVideoWidth;
-        mDimension.orig_video_height = mVideoHeight;
-        mDimension.video_width = mVideoWidth;
-        mDimension.video_height = mVideoHeight;
-
-        // start preview again
-        mPreviewState = QCAMERA_HAL_PREVIEW_START;
-        if (startPreview2() == NO_ERROR){
-            mPreviewState = QCAMERA_HAL_PREVIEW_STARTED;
-        }else{
-            ALOGE("%s: Restart for Video Failed",__func__);
-        }
     }
 }
-
-/**/
-bool QCameraHardwareInterface::getHdrInfoAndSetExp( int max_num_frm, int *num_frame, int *exp)
-{
-    bool rc = false;
-
-    if (mHdrMode == HDR_MODE && num_frame != NULL && exp != NULL &&
-      mRecordingHint != true &&
-      mPreviewState != QCAMERA_HAL_RECORDING_STARTED ) {
-        int ret = 0;
-        *num_frame = 1;
-        exp_bracketing_t temp;
-        memset(&temp, 0, sizeof(exp_bracketing_t));
-        ret = cam_config_get_parm(mCameraId, MM_CAMERA_PARM_HDR, (void *)&temp );
-        if (ret == NO_ERROR && max_num_frm > 0) {
-            /*set as AE Bracketing mode*/
-            temp.hdr_enable = false;
-            temp.mode = HDR_MODE;
-            temp.total_hal_frames = temp.total_frames;
-            ret = native_set_parms(MM_CAMERA_PARM_HDR,
-                                   sizeof(exp_bracketing_t), (void *)&temp);
-            if (ret) {
-                char *val, *exp_value, *prev_value;
-                int i;
-                exp_value = (char *) temp.values;
-                i = 0;
-                val = strtok_r(exp_value,",", &prev_value);
-                while (val != NULL ){
-                  exp[i++] = atoi(val);
-                  if(i >= max_num_frm )
-                    break;
-                  val = strtok_r(NULL, ",", &prev_value);
-                }
-                *num_frame =temp.total_frames;
-                rc = true;
-            }
-        } else {
-            temp.total_frames = 1;
-        }
-        /* Application waits until this many snapshots before restarting preview */
-        mParameters.set("num-snaps-per-shutter", 2);
-    }
-    return rc;
-}
-
-void QCameraHardwareInterface::hdrEvent(cam_ctrl_status_t status, void *cookie)
-{
-    QCameraStream * snapStream = (QCameraStream *)cookie;
-    ALOGV("HdrEvent: preview state: E");
-    if (snapStream != NULL && mStreamSnap != NULL) {
-        ALOGV("HdrEvent to snapshot stream");
-        snapStream->notifyHdrEvent(status, cookie);
-    }
-}
-
 }; // namespace android

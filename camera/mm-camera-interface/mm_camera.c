@@ -158,6 +158,8 @@ static mm_camera_channel_type_t mm_camera_util_opcode_2_ch_type(
     switch(opcode) {
     case MM_CAMERA_OPS_PREVIEW:
         return MM_CAMERA_CH_PREVIEW;
+    case MM_CAMERA_OPS_RDI:
+        return MM_CAMERA_CH_RDI;
     case MM_CAMERA_OPS_VIDEO:
         return MM_CAMERA_CH_VIDEO;
     case MM_CAMERA_OPS_SNAPSHOT:
@@ -341,6 +343,9 @@ int32_t mm_camera_set_general_parm(mm_camera_obj_t * my_obj, mm_camera_parm_t *p
     case MM_CAMERA_PARM_REDEYE_REDUCTION:
         return mm_camera_send_native_ctrl_cmd(my_obj,
                     CAMERA_SET_REDEYE_REDUCTION, sizeof(int32_t), (void *)parm->p_value);
+    case MM_CAMERA_PARM_VIDEO_HDR:
+        return mm_camera_send_native_ctrl_cmd(my_obj,
+                    CAMERA_SET_VIDEO_HDR, sizeof(int32_t), (void *)parm->p_value);
     case MM_CAMERA_PARM_WAVELET_DENOISE:
         return mm_camera_send_native_ctrl_cmd(my_obj,
                     CAMERA_SET_PARM_WAVELET_DENOISE, sizeof(denoise_param_t), (void *)parm->p_value);
@@ -383,23 +388,34 @@ int32_t mm_camera_set_general_parm(mm_camera_obj_t * my_obj, mm_camera_parm_t *p
       return mm_camera_send_native_ctrl_cmd(my_obj,
                   CAMERA_SET_FULL_LIVESHOT, sizeof(uint32_t), (void *)parm->p_value);
     }
+    case MM_CAMERA_PARM_CH_INTERFACE: {
+      return mm_camera_send_native_ctrl_cmd(my_obj,
+                  CAMERA_SET_CHANNEL_STREAM, sizeof(uint32_t), (void *)parm->p_value);
+    }
 
     case MM_CAMERA_PARM_LOW_POWER_MODE:
       return mm_camera_send_native_ctrl_cmd(my_obj,
                   CAMERA_SET_LOW_POWER_MODE, sizeof(uint32_t), (void *)parm->p_value);
 
-    case MM_CAMERA_PARM_CAF_TYPE:
-      CDBG("SM : %s : MM_CAMERA_PARM_CAF_TYPE value : %d",__func__,*((int *)(parm->p_value)));
-      return mm_camera_send_native_ctrl_cmd(my_obj,
-                  CAMERA_SET_PARM_CAF_TYPE, sizeof(int32_t), (void *)parm->p_value);
-
     case MM_CAMERA_PARM_HDR:
       return mm_camera_send_native_ctrl_cmd(my_obj,
                         CAMERA_SET_PARM_HDR, sizeof(exp_bracketing_t), (void *)parm->p_value);
 
-    case MM_CAMERA_PARM_CAF_LOCK_CANCEL:
-      return mm_camera_send_native_ctrl_cmd(my_obj,
-                  CAMERA_SET_CAF_LOCK_CANCEL, sizeof(uint32_t), (void *)parm->p_value);
+    case MM_CAMERA_PARM_ORIENTATION:
+        return mm_camera_send_native_ctrl_cmd(my_obj,
+                    CAMERA_SET_ROT_INFO, sizeof(int32_t), (void *)parm->p_value);
+
+    case MM_CAMERA_PARM_SKIN_BEAUTIFICATION:
+        return mm_camera_send_native_ctrl_cmd(my_obj,
+                    CAMERA_SKIN_BEAUTIFICATION, sizeof(int32_t), (void *)parm->p_value);
+
+    case MM_CAMERA_PARM_WATERMARK:
+        return mm_camera_send_native_ctrl_cmd(my_obj,
+                    CAMERA_SET_WATERMARK, sizeof(int32_t), (void *)parm->p_value);
+
+    case MM_CAMERA_PARM_MIRROR:
+        return mm_camera_send_native_ctrl_cmd(my_obj,
+                    CAMERA_SET_MIRROR, sizeof(int32_t), (void *)parm->p_value);
 
     default:
         CDBG("%s: default: parm %d not supported\n", __func__, parm->parm_type);
@@ -418,7 +434,7 @@ static int32_t mm_camera_send_native_ctrl_cmd(mm_camera_obj_t * my_obj,
     ctrl_cmd.timeout_ms = 1000;
     ctrl_cmd.value = value;
     ctrl_cmd.status = CAM_CTRL_SUCCESS;
-    rc = mm_camera_util_private_s_ctrl(my_obj->ctrl_fd, MSM_V4L2_PID_CTRL_CMD,
+    rc = mm_camera_util_s_ctrl(my_obj->ctrl_fd, MSM_V4L2_PID_CTRL_CMD,
                                                                             (int)&ctrl_cmd);
     CDBG("%s: type=%d, rc = %d, status = %d\n",
                 __func__, type, rc, ctrl_cmd.status);
@@ -441,7 +457,7 @@ static int32_t mm_camera_send_native_ctrl_timeout_cmd(mm_camera_obj_t * my_obj,
     ctrl_cmd.timeout_ms = timeout;
     ctrl_cmd.value = value;
     ctrl_cmd.status = CAM_CTRL_SUCCESS;
-    rc = mm_camera_util_private_s_ctrl(my_obj->ctrl_fd, MSM_V4L2_PID_CTRL_CMD,
+    rc = mm_camera_util_s_ctrl(my_obj->ctrl_fd, MSM_V4L2_PID_CTRL_CMD,
         (int)&ctrl_cmd);
     CDBG("%s: type=%d, rc = %d, status = %d\n",
         __func__, type, rc, ctrl_cmd.status);
@@ -493,15 +509,6 @@ int32_t mm_camera_set_parm(mm_camera_obj_t * my_obj,
                             MM_CAMERA_STATE_EVT_SET_FMT, fmt);
         }
         break;
-    case MM_CAMERA_PARM_CHECK_AF_RETRY:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_CHECK_AF_RETRY,
-                 0, (void *)NULL);
-    case MM_CAMERA_PARM_LG_CAF_LOCK:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_SET_LG_CAF_LOCK,
-                 0, (void *)NULL);
-    case MM_CAMERA_PARM_INFORM_STARTPRVIEW:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_SET_INFORM_STARTPREVIEW,
-                 0, (void *)NULL);
     default:
         rc = mm_camera_set_general_parm(my_obj, parm);
         break;
@@ -541,11 +548,11 @@ int32_t mm_camera_get_parm(mm_camera_obj_t * my_obj,
              dim->width, dim->height);
     }
         break;
-    case MM_CAMERA_PARM_RAW_SNAPSHOT_FMT:
-        *((cam_format_t *)parm->p_value) = my_obj->properties.pxlcode;
-        break;
     case MM_CAMERA_PARM_PREVIEW_FORMAT:
         *((int *)parm->p_value) = my_obj->properties.preview_format;
+        break;
+    case MM_CAMERA_PARM_RDI_FORMAT:
+        *((int *)parm->p_value) = CAMERA_RDI;
         break;
     case MM_CAMERA_PARM_PREVIEW_SIZES_CNT:
         *((int *)parm->p_value) = my_obj->properties.preview_sizes_cnt;
@@ -610,6 +617,9 @@ int32_t mm_camera_get_parm(mm_camera_obj_t * my_obj,
   case MM_CAMERA_PARM_3D_FRAME_FORMAT:
         return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_GET_PARM_3D_FRAME_FORMAT,
                      sizeof(camera_3d_frame_t), (void *)parm->p_value);
+    case MM_CAMERA_PARM_FPS_RANGE:
+        return mm_camera_send_native_ctrl_cmd(my_obj, CAMERA_GET_PARM_FPS_RANGE,
+                    sizeof(cam_sensor_fps_range_t), (void *)parm->p_value);
     case MM_CAMERA_PARM_MAXZOOM:
         return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_GET_PARM_MAXZOOM,
                      sizeof(int), (void *)parm->p_value);
@@ -647,32 +657,24 @@ int32_t mm_camera_get_parm(mm_camera_obj_t * my_obj,
     case MM_CAMERA_PARM_VFE_OUTPUT_ENABLE:
         *((int *)parm->p_value) = my_obj->properties.vfe_output_enable;
         break;
-    case MM_CAMERA_PARM_LUX_IDX:
-        CDBG("%s: MM_CAMERA_PARM_LUX_IDX\n", __func__);
-        return mm_camera_send_native_ctrl_cmd(my_obj, CAMERA_GET_PARM_LUX_IDX,
-                     sizeof(int), (void *)parm->p_value);
+
+    case MM_CAMERA_PARM_CH_INTERFACE:
+        rc = mm_camera_send_native_ctrl_cmd(my_obj,
+                  CAMERA_GET_CHANNEL_STREAM, sizeof(uint32_t), (void *)parm->p_value);
+        my_obj->channel_interface_mask = *((uint32_t *)(parm->p_value));
+        break;
+
     case MM_CAMERA_PARM_MAX_NUM_FACES_DECT:
         return mm_camera_send_native_ctrl_cmd(my_obj, CAMERA_GET_MAX_NUM_FACES_DECT,
                      sizeof(int), (void *)parm->p_value);
     case MM_CAMERA_PARM_FACIAL_FEATURE_INFO:
         return mm_camera_send_native_ctrl_cmd(my_obj, CAMERA_GET_FACIAL_FEATURE_INFO,
                      sizeof(int), (void *)parm->p_value);
-    case MM_CAMERA_PARM_HDR:
-        rc = mm_camera_send_native_ctrl_cmd(my_obj,
-                  CAMERA_GET_PARM_HDR, sizeof(exp_bracketing_t), (void *)parm->p_value);
-        //my_obj->channel_interface_mask = *((exp_bracketing_t *)(parm->p_value));
-        break;
-    case MM_CAMERA_GET_PARM_LOW_LIGHT_FOR_ZSL:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_GET_PARM_LOW_LIGHT_FOR_ZSL,
-                     sizeof(aec_info_for_flash_t), (void *)parm->p_value);
 
-    case MM_CAMERA_PARM_GET_AF_STATUS:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_GET_PARM_AF_STATUS,
-                     sizeof(af_actuator_status_t), (void *)parm->p_value);
+    case MM_CAMERA_PARM_FLL_AF:
+        return mm_camera_send_native_ctrl_cmd(my_obj, CAMERA_GET_PARM_AF_SHARPNESS,
+                     sizeof(int), (void *)parm->p_value);
 
-    case MM_CAMERA_PARM_F_NUMBER:
-        return mm_camera_send_native_ctrl_cmd(my_obj,   CAMERA_GET_PARM_F_NUMBER,
-                     sizeof(float), (void *)parm->p_value);
     default:
         /* needs to add more implementation */
         rc = -1;
@@ -856,6 +858,7 @@ int32_t mm_camera_action_start(mm_camera_obj_t *my_obj,
     case MM_CAMERA_OP_MODE_CAPTURE:
         switch(opcode) {
         case MM_CAMERA_OPS_PREVIEW:
+        case MM_CAMERA_OPS_RDI:
         case MM_CAMERA_OPS_SNAPSHOT:
         case MM_CAMERA_OPS_ZSL:
         case MM_CAMERA_OPS_RAW:
@@ -869,6 +872,7 @@ int32_t mm_camera_action_start(mm_camera_obj_t *my_obj,
     case MM_CAMERA_OP_MODE_VIDEO:
         switch(opcode) {
         case MM_CAMERA_OPS_PREVIEW:
+        case MM_CAMERA_OPS_RDI:
         case MM_CAMERA_OPS_VIDEO:
         case MM_CAMERA_OPS_SNAPSHOT:
             rc = mm_camera_ch_fn(my_obj,    ch_type,
@@ -912,6 +916,7 @@ int32_t mm_camera_action_stop(mm_camera_obj_t *my_obj,
     case MM_CAMERA_OP_MODE_CAPTURE:
         switch(opcode) {
         case MM_CAMERA_OPS_PREVIEW:
+        case MM_CAMERA_OPS_RDI:
         case MM_CAMERA_OPS_SNAPSHOT:
         case MM_CAMERA_OPS_ZSL:
         case MM_CAMERA_OPS_RAW:
@@ -926,6 +931,7 @@ int32_t mm_camera_action_stop(mm_camera_obj_t *my_obj,
     case MM_CAMERA_OP_MODE_VIDEO:
         switch(opcode) {
         case MM_CAMERA_OPS_PREVIEW:
+        case MM_CAMERA_OPS_RDI:
         case MM_CAMERA_OPS_VIDEO:
         case MM_CAMERA_OPS_SNAPSHOT:
             rc = mm_camera_ch_fn(my_obj , ch_type,

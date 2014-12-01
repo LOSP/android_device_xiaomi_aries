@@ -101,6 +101,8 @@ public:
 
     static const char KEY_ZSL[];
     static const char KEY_SUPPORTED_ZSL_MODES[];
+    static const char KEY_QC_VIDEO_HDR[];
+    static const char KEY_QC_SUPPORTED_VIDEO_HDR_MODES[];
 
     static const char KEY_CAMERA_MODE[];
 
@@ -123,6 +125,16 @@ public:
     static const char KEY_FACE_DETECTION[];
     static const char KEY_SUPPORTED_FACE_DETECTION[];
 
+    // supported camera features to be queried by Snapdragon SDK
+    //Read only
+    static const char KEY_SUPPORTED_CAMERA_FEATURES[];
+
+    //Indicates number of faces requested by the application.
+    //This value will be rejected if the requested faces
+    //greater than supported by hardware.
+    //Write only.
+    static const char KEY_MAX_NUM_REQUESTED_FACES[];
+
     //Redeye Reduction
     static const char KEY_REDEYE_REDUCTION[];
     static const char KEY_SUPPORTED_REDEYE_REDUCTION[];
@@ -137,7 +149,6 @@ public:
     static const char SCENE_MODE_BACKLIGHT[];
     static const char SCENE_MODE_FLOWERS[];
     static const char SCENE_MODE_AR[];
-    static const char SCENE_MODE_HDR[];
 	static const char SCENE_DETECT_OFF[];
     static const char SCENE_DETECT_ON[];
     static const char PIXEL_FORMAT_YUV420SP_ADRENO[]; // ADRENO
@@ -202,6 +213,10 @@ public:
     static const char ZSL_OFF[];
     static const char ZSL_ON[];
 
+    // Values for HDR settings
+    static const char VIDEO_HDR_OFF[];
+    static const char VIDEO_HDR_ON[];
+
     // Values for HDR Bracketing settings.
     static const char AE_BRACKET_HDR_OFF[];
     static const char AE_BRACKET_HDR[];
@@ -233,8 +248,6 @@ public:
 
 
    static const char KEY_SINGLE_ISP_OUTPUT_ENABLED[];
-   static const char KEY_SUPPORTED_CAMERA_FEATURES[];
-   static const char KEY_MAX_NUM_REQUESTED_FACES[];
 
     enum {
         CAMERA_ORIENTATION_UNKNOWN = 0,

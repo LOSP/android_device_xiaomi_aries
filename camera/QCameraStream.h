@@ -39,20 +39,9 @@ extern "C" {
 #define MM_CAMERA_CH_PREVIEW_MASK    (0x01 << MM_CAMERA_CH_PREVIEW)
 #define MM_CAMERA_CH_VIDEO_MASK      (0x01 << MM_CAMERA_CH_VIDEO)
 #define MM_CAMERA_CH_SNAPSHOT_MASK   (0x01 << MM_CAMERA_CH_SNAPSHOT)
+#define MM_CAMERA_CH_RDI_MASK        (0x01 << MM_CAMERA_CH_RDI)
 
 } /* extern C*/
-
-
-
-typedef struct snap_hdr_record_t_ {
-  bool hdr_on;
-  int  num_frame;
-  int  num_raw_received;
-
-  /*in terms of 2^(n/6), e.g -6 means (1/2)x, while 12 is 4x*/
-  int  exp[MAX_HDR_EXP_FRAME_NUM];
-  mm_camera_ch_data_buf_t *recvd_frame[MAX_HDR_EXP_FRAME_NUM];
-} snap_hdr_record_t;
 
 
 namespace android {
@@ -120,7 +109,9 @@ public:
     virtual void *getLastQueuedFrame(void){return NULL;}
     virtual status_t takePictureZSL(void){return NO_ERROR;}
     virtual status_t takeLiveSnapshot(){return NO_ERROR;}
-    virtual status_t takePictureLiveshot(mm_camera_ch_data_buf_t* recvd_frame){return NO_ERROR;}
+    virtual status_t takePictureLiveshot(mm_camera_ch_data_buf_t* recvd_frame,
+                                 cam_ctrl_dimension_t *dim,
+                                 int frame_len){return NO_ERROR;}
 	virtual void setModeLiveSnapshot(bool){;}
     virtual status_t initSnapshotBuffers(cam_ctrl_dimension_t *dim,
                                  int num_of_buf){return NO_ERROR;}
@@ -131,8 +122,6 @@ public:
     virtual void notifyROIEvent(fd_roi_t roi) {;}
     virtual void notifyWDenoiseEvent(cam_ctrl_status_t status, void * cookie) {};
     virtual void resetSnapshotCounters(void ){};
-    virtual void InitHdrInfoForSnapshot(bool HDR_on, int number_frames, int *exp ) {};
-    virtual void notifyHdrEvent(cam_ctrl_status_t status, void * cookie) {};
 
     QCameraStream();
     QCameraStream(int, camera_mode_t);
@@ -250,10 +239,50 @@ private:
     cam_ctrl_dimension_t     dim;
     struct msm_frame        *mLastQueuedFrame;
     mm_camera_reg_buf_t      mDisplayBuf;
+    mm_camera_reg_buf_t      mRdiBuf;
     mm_cameara_stream_buf_t  mDisplayStreamBuf;
+    mm_cameara_stream_buf_t  mRdiStreamBuf;
     Mutex                   mDisplayLock;
     preview_stream_ops_t   *mPreviewWindow;
     static const int        kPreviewBufferCount = PREVIEW_BUFFER_COUNT;
+    mm_camera_ch_data_buf_t mNotifyBuffer[16];
+    int8_t                  mNumFDRcvd;
+    int                     mVFEOutputs;
+    int                     mHFRFrameCnt;
+    int                     mHFRFrameSkip;
+};
+
+class QCameraStream_Rdi : public QCameraStream {
+public:
+    status_t    init();
+    status_t    start() ;
+    void        stop()  ;
+    void        release() ;
+
+    static QCameraStream*  createInstance(int, camera_mode_t);
+    static void            deleteInstance(QCameraStream *p);
+
+    QCameraStream_Rdi() {};
+    virtual             ~QCameraStream_Rdi();
+    status_t initRdiBuffers();
+    status_t processRdiFrame (mm_camera_ch_data_buf_t *frame);
+    friend class QCameraHardwareInterface;
+
+private:
+    QCameraStream_Rdi(int cameraId, camera_mode_t);
+    /*allocate and free buffers for rdi case*/
+    status_t                 getBufferRdi( );
+    status_t                 freeBufferRdi();
+
+    void                     dumpFrameToFile(struct msm_frame* newFrame);
+
+    int8_t                   my_id;
+    mm_camera_op_mode_type_t op_mode;
+    cam_ctrl_dimension_t     dim;
+    mm_camera_reg_buf_t      mRdiBuf;
+    mm_cameara_stream_buf_t  mRdiStreamBuf;
+    Mutex                   mDisplayLock;
+    static const int        kRdiBufferCount = PREVIEW_BUFFER_COUNT;
     mm_camera_ch_data_buf_t mNotifyBuffer[16];
     int8_t                  mNumFDRcvd;
     int                     mVFEOutputs;
@@ -273,10 +302,11 @@ public:
     static void deleteInstance(QCameraStream *p);
 
     status_t takePictureZSL(void);
-    status_t takePictureLiveshot(mm_camera_ch_data_buf_t* recvd_frame);
+    status_t takePictureLiveshot(mm_camera_ch_data_buf_t* recvd_frame,
+                                 cam_ctrl_dimension_t *dim,
+                                 int frame_len);
     status_t receiveRawPicture(mm_camera_ch_data_buf_t* recvd_frame);
     void receiveCompleteJpegPicture(jpeg_event_t event);
-	void jpegErrorHandler(jpeg_event_t event);
     void receiveJpegFragment(uint8_t *ptr, uint32_t size);
     void deInitBuffer(void);
     sp<IMemoryHeap> getRawHeap() const;
@@ -288,8 +318,6 @@ public:
     void notifyWDenoiseEvent(cam_ctrl_status_t status, void * cookie);
     friend void liveshot_callback(mm_camera_ch_data_buf_t *frame,void *user_data);
     void resetSnapshotCounters(void );
-    void InitHdrInfoForSnapshot(bool HDR_on, int number_frames, int *exp );
-    void notifyHdrEvent(cam_ctrl_status_t status, void * cookie);
     bool getSnapJpegCbState(void);
     void setSnapJpegCbState(bool state);
 
@@ -335,7 +363,6 @@ private:
     status_t doWaveletDenoise(mm_camera_ch_data_buf_t* frame);
     status_t sendWDenoiseStartMsg(mm_camera_ch_data_buf_t * frame);
     void lauchNextWDenoiseFromQueue();
-    status_t doHdrProcessing( );
 
     /* Member variables */
 
@@ -385,9 +412,6 @@ private:
     bool                    mIsDoingWDN; // flag to indicate if WDN is going on (one frame is sent out for WDN)
 	bool                    mDropThumbnail;
 	int                     mJpegQuality;
-    snap_hdr_record_t       mHdrInfo;
-    int hdrRawCount;
-    int hdrJpegCount;
 }; // QCameraStream_Snapshot
 
 

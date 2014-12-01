@@ -31,6 +31,7 @@
 #include <system/window.h>
 #include <system/camera.h>
 #include <hardware/camera.h>
+#include <hardware/power.h>
 #include <gralloc_priv.h>
 #include <QComOMXMetadata.h>
 
@@ -44,7 +45,6 @@ extern "C" {
 #include "QCameraStream.h"
 #include "QCamera_Intf.h"
 
-#include "hdr/include/morpho_noise_reduction_ext.h"
 //Error codes
 #define  NOT_FOUND -1
 #define MAX_ZOOM_RATIOS 62
@@ -106,7 +106,7 @@ typedef enum {
   HAL_DUMP_FRM_VIDEO = 1<<1,
   HAL_DUMP_FRM_MAIN = 1<<2,
   HAL_DUMP_FRM_THUMBNAIL = 1<<3,
-
+  HAL_DUMP_FRM_RDI = 1<<4,
   /*8 bits mask*/
   HAL_DUMP_FRM_MAX = 1 << 8
 } HAL_cam_dump_frm_type_t;
@@ -120,7 +120,7 @@ typedef enum {
 } qQamera_mode_t;
 
 #define HAL_DUMP_FRM_MASK_ALL ( HAL_DUMP_FRM_PREVIEW + HAL_DUMP_FRM_VIDEO + \
-    HAL_DUMP_FRM_MAIN + HAL_DUMP_FRM_THUMBNAIL)
+    HAL_DUMP_FRM_MAIN + HAL_DUMP_FRM_THUMBNAIL + HAL_DUMP_FRM_RDI)
 #define QCAMERA_HAL_PREVIEW_STOPPED    0
 #define QCAMERA_HAL_PREVIEW_START      1
 #define QCAMERA_HAL_PREVIEW_STARTED    2
@@ -205,7 +205,6 @@ static const char ExifUndefinedPrefix[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 #define GPS_PROCESSING_METHOD_SIZE       101
 #define FOCAL_LENGTH_DECIMAL_PRECISION   100
 #define EXIF_ASCII_PREFIX_SIZE           8   //(sizeof(ExifAsciiPrefix))
-#define F_NUMBER_DECIMAL_PRECISION       100
 
 typedef struct{
     //GPS tags
@@ -224,7 +223,6 @@ typedef struct{
     rat_t       f_number;
     uint16_t    flashMode;
     uint16_t    isoSpeed;
-    rat_t       exposure_time;
 
     bool        mAltitude;
     bool        mLongitude;
@@ -494,6 +492,8 @@ public:
     preview_format_info_t getPreviewFormatInfo( );
     bool isCameraReady();
     bool isNoDisplayMode();
+    uint32_t getChannelInterface();
+    void setChannelInterface(uint32_t value);
 
 private:
     int16_t  zoomRatios[MAX_ZOOM_RATIOS];
@@ -527,6 +527,7 @@ private:
     bool isSnapshotRunning();
 
     void processChannelEvent(mm_camera_ch_event_t *, app_notify_cb_t *);
+    void processRdiChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *);
     void processPreviewChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *);
     void processRecordChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *);
     void processSnapshotChannelEvent(mm_camera_ch_event_type_t channelEvent, app_notify_cb_t *);
@@ -540,13 +541,13 @@ private:
     void handleZoomEventForPreview(app_notify_cb_t *);
     void handleZoomEventForSnapshot(void);
     status_t autoFocusEvent(cam_ctrl_status_t *, app_notify_cb_t *);
-    status_t autoFocusMoveEvent(cam_ctrl_status_t *, app_notify_cb_t *);
 
     void filterPictureSizes();
     bool supportsSceneDetection();
     bool supportsSelectableZoneAf();
     bool supportsFaceDetection();
     bool supportsRedEyeReduction();
+    bool supportsVideoHDR();
     bool preview_parm_config (cam_ctrl_dimension_t* dim,QCameraParameters& parm);
 
     void stopPreviewInternal();
@@ -556,16 +557,12 @@ private:
     //status_t startPreviewZSL();
     void pausePreviewForSnapshot();
     void pausePreviewForZSL();
-    void pausePreviewForVideo();
-    void prepareVideoPicture(bool disable);
     status_t resumePreviewAfterSnapshot();
 
     status_t runFaceDetection();
 
     status_t           setParameters(const QCameraParameters& params);
     QCameraParameters&  getParameters() ;
-
-    bool getFlashCondition(void);
 
     status_t setCameraMode(const QCameraParameters& params);
     status_t setPictureSizeTable(void);
@@ -595,6 +592,9 @@ private:
     status_t setFocusMode(const QCameraParameters& params);
     status_t setBrightness(const QCameraParameters& params);
     status_t setSkinToneEnhancement(const QCameraParameters& params);
+    status_t setSkinBeautification(const QCameraParameters& params);
+    status_t setWatermark(const QCameraParameters& params);
+    status_t setMirror(const QCameraParameters& params);
     status_t setOrientation(const QCameraParameters& params);
     status_t setLensshadeValue(const QCameraParameters& params);
     status_t setMCEValue(const QCameraParameters& params);
@@ -614,6 +614,7 @@ private:
     status_t setOverlayFormats(const QCameraParameters& params);
     status_t setHighFrameRate(const QCameraParameters& params);
     status_t setRedeyeReduction(const QCameraParameters& params);
+    status_t setVideoHDR(const QCameraParameters& params);
     status_t setAEBracket(const QCameraParameters& params);
     status_t setFaceDetect(const QCameraParameters& params);
     status_t setDenoise(const QCameraParameters& params);
@@ -628,8 +629,10 @@ private:
     status_t setCaptureBurstExp(void);
     status_t setPowerMode(const QCameraParameters& params);
     void takePicturePrepareHardware( );
+    status_t setChannelInterfaceMask(const CameraParameters& params);
     status_t setNoDisplayMode(const QCameraParameters& params);
     status_t setCAFLockCancel(void);
+    status_t setMovieSolid(const QCameraParameters& params);
 
     isp3a_af_mode_t getAutoFocusMode(const QCameraParameters& params);
     bool isValidDimension(int w, int h);
@@ -647,6 +650,7 @@ private:
     int32_t createPreview();
     int32_t createRecord();
     int32_t createSnapshot();
+    int32_t createRdi();
 
     int getHDRMode();
     //EXIF
@@ -659,12 +663,9 @@ private:
     exif_tags_info_t* getExifData(){ return mExifData; }
     int getExifTableNumEntries() { return mExifTableNumEntries; }
     void parseGPSCoordinate(const char *latlonString, rat_t* coord);
-    bool getHdrInfoAndSetExp( int max_num_frm, int *num_frame, int *exp);
-    void hdrEvent(cam_ctrl_status_t status, void *cookie);
 
     int           mCameraId;
     camera_mode_t myMode;
-    bool mPauseFramedispatch;
 
     QCameraParameters    mParameters;
     //sp<Overlay>         mOverlay;
@@ -682,6 +683,7 @@ private:
     //mutable Mutex       eventLock;
     Mutex         mCallbackLock;
     Mutex         mPreviewMemoryLock;
+    Mutex         mRdiMemoryLock;
     Mutex         mRecordingMemoryLock;
     Mutex         mAutofocusLock;
     Mutex         mMetaDataWaitLock;
@@ -695,10 +697,12 @@ private:
     QCameraStream       *mStreamRecord;
     QCameraStream       *mStreamSnap;
     QCameraStream       *mStreamLiveSnap;
+    QCameraStream       *mStreamRdi;
 
     cam_ctrl_dimension_t mDimension;
+    int  mPictureWidth_ui, mPictureHeight_ui;
     int  mPreviewWidth, mPreviewHeight;
-    int  mVideoWidth, mVideoHeight;
+    int  videoWidth, videoHeight;
     int  thumbnailWidth, thumbnailHeight;
     int  maxSnapshotWidth, maxSnapshotHeight;
     int  mPreviewFormat;
@@ -709,6 +713,7 @@ private:
     int  mBestShotMode;
     int  mEffects;
     int  mSkinToneEnhancement;
+    int  mSkinBeautification;
     int  mDenoiseValue;
     int  mHJR;
     int  mRotation;
@@ -749,13 +754,13 @@ private:
     bool mReleasedRecordingFrame;
     bool mStateLiveshot;
     int mHdrMode;
+    int mVideoHdrMode;
+    bool mVideoHDRMode;
     int mSnapshotFormat;
     int mZslInterval;
     bool mRestartPreview;
     bool isCameraOpen;
-
-    led_mode_t mLedStatusForZsl;
-    bool mFlashCond;
+    bool mVideoStabilization;
 
 /*for histogram*/
     int            mStatsOn;
@@ -802,19 +807,19 @@ private:
     String8 mFpsRangesSupportedValues;
     String8 mZslValues;
     String8 mFocusDistance;
+    String8 mVideoHdrValues;
 
     friend class QCameraStream;
     friend class QCameraStream_record;
     friend class QCameraStream_preview;
     friend class QCameraStream_Snapshot;
+    friend class QCameraStream_Rdi;
 
     camera_size_type* mPictureSizes;
     camera_size_type* mPreviewSizes;
     camera_size_type* mVideoSizes;
     const camera_size_type * mPictureSizesPtr;
     HAL_camera_state_type_t mCameraState;
-    void *libdnr;
-    int (*LINK_morpho_DNR_ProcessFrame)(unsigned char* yuvImage, int width, int height, int y_level, int c_level);
 
      /* Temporary - can be removed after Honeycomb*/
 #ifdef USE_ION
@@ -834,6 +839,7 @@ private:
      /*preview memory without display case: memory is allocated
       directly by camera */
      QCameraHalHeap_t     mNoDispPreviewMemory;
+     QCameraHalHeap_t     mRdiMemory;
 
      QCameraHalHeap_t     mSnapshotMemory;
      QCameraHalHeap_t     mThumbnailMemory;
@@ -850,7 +856,13 @@ private:
      exif_values_t          mExifValues;                        //Exif values in usable format
      int                    mExifTableNumEntries;            //NUmber of entries in mExifData
      int                 mNoDisplayMode;
-     int                 mIsoValue;
+     uint32_t            mChannelInterfaceMask;
+
+     power_module_t*   mPowerModule;
+     void *libdms;
+     int (*LINK_morpho_MovieSolid_Init)(int a, int b);
+     int (*LINK_morpho_MovieSolid_Function)(void*, void*);
+     int (*LINK_morpho_MovieSolid_Finalize)(void);
 
      /* Used to show the process state of snapshot_jpeg_cb*/
      Mutex                  mSnapJpegCbLock;

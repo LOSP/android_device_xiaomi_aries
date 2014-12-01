@@ -135,7 +135,7 @@ status_t QCameraStream_preview::getBufferFromSurface()
 
     //as software encoder is used to encode 720p, to enhance the performance
     //cashed pmem is used here
-    if(mVFEOutputs == 1 && dim.display_height == 720)
+    if(mVFEOutputs == 1)
         gralloc_usage = GRALLOC_USAGE_HW_CAMERA_WRITE | CAMERA_GRALLOC_HEAP_ID | CAMERA_GRALLOC_FALLBACK_HEAP_ID;
     else
         gralloc_usage = GRALLOC_USAGE_HW_CAMERA_WRITE | CAMERA_GRALLOC_HEAP_ID | CAMERA_GRALLOC_FALLBACK_HEAP_ID |
@@ -262,13 +262,7 @@ status_t QCameraStream_preview::putBufferToSurface() {
         if (cnt < mHalCamCtrl->mPreviewMemory.buffer_count) {
             if (NO_ERROR != mHalCamCtrl->sendUnMappingBuf(MSM_V4L2_EXT_CAPTURE_MODE_PREVIEW, cnt, mCameraId,
                                                           CAM_SOCK_MSG_TYPE_FD_UNMAPPING)) {
-                ALOGE("%s: unmapping Preview Buffer", __func__);
-            }
-            if(mHalCamCtrl->isZSLMode()) {
-                if (NO_ERROR != mHalCamCtrl->sendUnMappingBuf(MSM_V4L2_EXT_CAPTURE_MODE_THUMBNAIL, cnt, mCameraId,
-                                                          CAM_SOCK_MSG_TYPE_FD_UNMAPPING)) {
-                    ALOGE("%s: unmapping Thumbnail Buffer for ZSL", __func__);
-                }
+                ALOGE("%s: sending data Msg Failed", __func__);
             }
         }
 
@@ -345,9 +339,9 @@ status_t  QCameraStream_preview::getBufferNoDisplay( )
     planes[i] = dim.display_frame_offset.mp[i].len;
   }
 
-  frame_len = dim.picture_frame_offset.frame_len;
-  y_off = dim.picture_frame_offset.mp[0].offset;
-  cbcr_off = dim.picture_frame_offset.mp[1].offset;
+  frame_len = dim.display_frame_offset.frame_len;
+  y_off = dim.display_frame_offset.mp[0].offset;
+  cbcr_off = dim.display_frame_offset.mp[1].offset;
   ALOGV("%s: main image: rotation = %d, yoff = %d, cbcroff = %d, size = %d, width = %d, height = %d",
        __func__, dim.rotation, y_off, cbcr_off, frame_len,
        dim.display_width, dim.display_height);
@@ -384,12 +378,6 @@ status_t   QCameraStream_preview::freeBufferNoDisplay()
           if (NO_ERROR != mHalCamCtrl->sendUnMappingBuf(MSM_V4L2_EXT_CAPTURE_MODE_PREVIEW,
                        cnt, mCameraId, CAM_SOCK_MSG_TYPE_FD_UNMAPPING)) {
               ALOGE("%s: sending data Msg Failed", __func__);
-          }
-          if(mHalCamCtrl->isZSLMode()) {
-              if (NO_ERROR != mHalCamCtrl->sendUnMappingBuf(MSM_V4L2_EXT_CAPTURE_MODE_THUMBNAIL, cnt, mCameraId,
-                                                            CAM_SOCK_MSG_TYPE_FD_UNMAPPING)) {
-                  ALOGE("%s: Send socket msg to Unmap Failed", __func__);
-              }
           }
       }
   }
@@ -471,7 +459,7 @@ void QCameraStream_preview::notifyROIEvent(fd_roi_t roi)
               roi.d.data.face.right_eye_center[0]*2000/mHalCamCtrl->mDimension.display_width - 1000;
             mHalCamCtrl->mFace[idx].right_eye[1] =
               roi.d.data.face.right_eye_center[1]*2000/mHalCamCtrl->mDimension.display_height - 1000;
-#if 0
+#ifdef QCOM_BSP
             // Center of mouth
             mHalCamCtrl->mFace[idx].mouth[0] =
               roi.d.data.face.mouth_center[0]*2000/mHalCamCtrl->mDimension.display_width - 1000;
@@ -625,18 +613,6 @@ status_t QCameraStream_preview::initDisplayBuffers()
       goto error;
     }
 
-    if(mHalCamCtrl->isZSLMode()) {
-         ret = mHalCamCtrl->sendMappingBuf(
-                        MSM_V4L2_EXT_CAPTURE_MODE_THUMBNAIL,
-                        i,
-                        mDisplayStreamBuf.frame[i].fd,
-                        mHalCamCtrl->mPreviewMemory.private_buffer_handle[i]->size,
-                        mCameraId, CAM_SOCK_MSG_TYPE_FD_MAPPING);
-        if (NO_ERROR != ret) {
-          ALOGE("%s: Send socket msg to map Failed", __func__);
-          goto error;
-        }
-    }
     mDisplayBuf.preview.buf.mp[i].frame = mDisplayStreamBuf.frame[i];
     mDisplayBuf.preview.buf.mp[i].frame_offset = mHalCamCtrl->mPreviewMemory.addr_offset[i];
     mDisplayBuf.preview.buf.mp[i].num_planes = num_planes;
@@ -748,6 +724,7 @@ status_t QCameraStream_preview::initPreviewOnlyBuffers()
       mDisplayStreamBuf.frame[i].path = OUTPUT_TYPE_P;
       mDisplayStreamBuf.frame[i].buffer =
           (long unsigned int)mHalCamCtrl->mNoDispPreviewMemory.camera_memory[i]->data;
+      mDisplayStreamBuf.frame[i].ion_alloc.len = mHalCamCtrl->mNoDispPreviewMemory.alloc[i].len;
       mDisplayStreamBuf.frame[i].ion_dev_fd = mHalCamCtrl->mNoDispPreviewMemory.main_ion_fd[i];
       mDisplayStreamBuf.frame[i].fd_data = mHalCamCtrl->mNoDispPreviewMemory.ion_info_fd[i];
 
@@ -766,16 +743,6 @@ status_t QCameraStream_preview::initPreviewOnlyBuffers()
       ALOGE("%s: sending mapping data Msg Failed", __func__);
     }
 
-    if(mHalCamCtrl->isZSLMode()) {
-        if (NO_ERROR != mHalCamCtrl->sendMappingBuf(
-                    MSM_V4L2_EXT_CAPTURE_MODE_THUMBNAIL,
-                    i,
-                    mDisplayStreamBuf.frame[i].fd,
-                    mHalCamCtrl->mNoDispPreviewMemory.size,
-                    mCameraId, CAM_SOCK_MSG_TYPE_FD_MAPPING)) {
-            ALOGE("%s: sending mapping data Msg Failed", __func__);
-        }
-    }
     mDisplayBuf.preview.buf.mp[i].frame = mDisplayStreamBuf.frame[i];
     mDisplayBuf.preview.buf.mp[i].frame_offset = mDisplayStreamBuf.frame[i].y_off;
     mDisplayBuf.preview.buf.mp[i].num_planes = num_planes;
@@ -882,13 +849,6 @@ status_t QCameraStream_preview::processPreviewFrameWithDisplay(
     ALOGE("%s: X: HAL control object not set",__func__);
     /*Call buf done*/
     return BAD_VALUE;
-  }
-
-  if(mHalCamCtrl->mPauseFramedispatch) {
-      if(MM_CAMERA_OK != cam_evt_buf_done(mCameraId, frame)) {
-            ALOGE("BUF DONE FAILED for the recylce buffer");
-      }
-      return NO_ERROR;
   }
   mHalCamCtrl->mCallbackLock.lock();
   camera_data_timestamp_callback rcb = mHalCamCtrl->mDataCbTimestamp;
@@ -1195,20 +1155,7 @@ status_t QCameraStream_preview::processPreviewFrameWithOutDisplay(
              'previewWidth * previewHeight * 3/2'.
               Needed when gralloc allocated extra memory.*/
           //Can add this check for other formats as well.
-          if( mHalCamCtrl->mPreviewFormat == CAMERA_YUV_420_NV21) {
-              previewBufSize = previewWidth * previewHeight * 3/2;
-              if(previewBufSize != mHalCamCtrl->mPreviewMemory.private_buffer_handle[frame->def.idx]->size) {
-                  previewMem = mHalCamCtrl->mGetMemory(mHalCamCtrl->mPreviewMemory.private_buffer_handle[frame->def.idx]->fd,
-                  previewBufSize, 1, mHalCamCtrl->mCallbackCookie);
-                  if (!previewMem || !previewMem->data) {
-                      ALOGE("%s: mGetMemory failed.\n", __func__);
-                  } else {
-                      data = previewMem;
-                  }
-              } else
-                    data = mHalCamCtrl->mPreviewMemory.camera_memory[frame->def.idx];//mPreviewHeap->mBuffers[frame->def.idx];
-          } else
-                data = mHalCamCtrl->mPreviewMemory.camera_memory[frame->def.idx];//mPreviewHeap->mBuffers[frame->def.idx];
+        data = mHalCamCtrl->mNoDispPreviewMemory.camera_memory[frame->def.idx];//mPreviewHeap->mBuffers[frame->def.idx];
       } else {
           data = NULL;
       }
@@ -1391,7 +1338,12 @@ status_t QCameraStream_preview::start()
     goto end;
 
 error:
-    putBufferToSurface();
+
+    if (!mHalCamCtrl->isNoDisplayMode())
+      putBufferToSurface();
+    else
+      freeBufferNoDisplay();
+
 end:
     ALOGV("%s: X", __func__);
     return ret;

@@ -125,8 +125,7 @@ typedef enum {
   CAMERA_RDI,
   CAMERA_YUV_420_YV12,
   CAMERA_YUV_422_NV16,
-  CAMERA_YUV_422_NV61,
-  CAMERA_YUV_422_YUYV,
+  CAMERA_YUV_422_NV61
 } cam_format_t;
 
 typedef enum {
@@ -160,19 +159,8 @@ typedef enum {
   CAM_SOCK_MSG_TYPE_WDN_START,
   CAM_SOCK_MSG_TYPE_HIST_MAPPING,
   CAM_SOCK_MSG_TYPE_HIST_UNMAPPING,
-  CAM_SOCK_MSG_TYPE_HDR_START,
   CAM_SOCK_MSG_TYPE_MAX
 }mm_camera_socket_msg_type;
-
-
-#define MAX_HDR_EXP_FRAME_NUM   5
-typedef struct {
-  unsigned long cookie;
-  int num_hdr_frames;
-  int hdr_main_idx[MAX_HDR_EXP_FRAME_NUM];
-  int hdr_thm_idx[MAX_HDR_EXP_FRAME_NUM];
-  int exp[MAX_HDR_EXP_FRAME_NUM];
-} mm_camera_hdr_start_type;
 
 #define MM_MAX_WDN_NUM 2
 typedef struct {
@@ -188,7 +176,6 @@ typedef struct {
     mm_camera_frame_map_type frame_fd_map;
     mm_camera_frame_unmap_type frame_fd_unmap;
     mm_camera_wdn_start_type wdn_start;
-    mm_camera_hdr_start_type hdr_pkg;
   } payload;
 } cam_sock_packet_t;
 
@@ -208,6 +195,12 @@ typedef enum {
   CAMERA_MODE_MAX = CAMERA_ZSL_MODE,
 } camera_mode_t;
 
+enum {
+  CAMERA_SUPPORT_MODE_2D = 0x01, /* Camera Sensor supports 2D mode. */
+  CAMERA_SUPPORT_MODE_3D = 0x02, /* Camera Sensor supports 3D mode. */
+  CAMERA_SUPPORT_MODE_NONZSL = 0x04, /* Camera Sensor in NON-ZSL mode. */
+  CAMERA_SUPPORT_MODE_ZSL = 0x08 /* Camera Sensor supports ZSL mode. */
+};
 
 typedef struct {
   int  modes_supported;
@@ -265,7 +258,6 @@ typedef struct {
   uint32_t default_preview_width;
   uint32_t default_preview_height;
   uint32_t bestshot_reconfigure;
-  uint32_t pxlcode;
 }cam_prop_t;
 
 typedef struct {
@@ -300,7 +292,6 @@ typedef struct {
   cam_format_t    main_img_format;
   cam_format_t    rdi0_format;
   cam_format_t    rdi1_format;
-  cam_format_t    raw_img_format;
   cam_pad_format_t prev_padding_format;
   cam_pad_format_t enc_padding_format;
   cam_pad_format_t thumb_padding_format;
@@ -328,31 +319,6 @@ typedef struct {
   cam_frame_len_offset_t thumb_frame_offset;
   uint32_t channel_interface_mask;
 } cam_ctrl_dimension_t;
-
-typedef struct {
-  uint8_t cid;
-  uint8_t dt;
-  uint32_t inst_handle;
-} cam_cid_entry_t;
-
-#define CAM_MAX_CID_NUM    8
-typedef struct {
-  /*should we hard code max CIDs? if not we need to have two CMD*/
-  uint8_t num_cids;
-  cam_cid_entry_t cid_entries[CAM_MAX_CID_NUM];
-} cam_cid_info_t;
-
-typedef struct {
-  /* we still use prev, video, main,
-   * thumb to interprete image types */
-  uint32_t image_mode;                 /* input */
-  cam_format_t format;                 /* input */
-  cam_pad_format_t padding_format;     /* input */
-  int rotation;                        /* input */
-  uint16_t width;                      /* input/output */
-  uint16_t height;                     /* input/output */
-  cam_frame_len_offset_t frame_offset; /* output */
-} cam_frame_resolution_t;
 
 /* Add enumenrations at the bottom but before MM_CAMERA_PARM_MAX */
 typedef enum {
@@ -439,7 +405,6 @@ typedef enum {
     MM_CAMERA_PARM_AWB_LOCK,
     MM_CAMERA_PARM_AF_MTR_AREA,
     MM_CAMERA_PARM_AEC_MTR_AREA,
-    MM_CAMERA_GET_PARM_LOW_LIGHT_FOR_ZSL,
     MM_CAMERA_PARM_LOW_POWER_MODE,
     MM_CAMERA_PARM_MAX_HFR_MODE, /* 80 */
     MM_CAMERA_PARM_MAX_VIDEO_SIZE,
@@ -459,21 +424,16 @@ typedef enum {
     MM_CAMERA_PARM_HFR_FRAME_SKIP,
     MM_CAMERA_PARM_CH_INTERFACE,
     //or single output enabled to differentiate 7x27a with others
+    MM_CAMERA_PARM_FLL_AF,
     MM_CAMERA_PARM_BESTSHOT_RECONFIGURE,
     MM_CAMERA_PARM_MAX_NUM_FACES_DECT,
     MM_CAMERA_PARM_FPS_RANGE,
-    MM_CAMERA_PARM_CID,
-    MM_CAMERA_PARM_FRAME_RESOLUTION,
-    MM_CAMERA_PARM_RAW_SNAPSHOT_FMT,
     MM_CAMERA_PARM_FACIAL_FEATURE_INFO,
-    MM_CAMERA_PARM_CAF_LOCK_CANCEL,
-    MM_CAMERA_PARM_CAF_TYPE,
-    MM_CAMERA_PARM_LUX_IDX,
-    MM_CAMERA_PARM_GET_AF_STATUS,
-    MM_CAMERA_PARM_CHECK_AF_RETRY,
-    MM_CAMERA_PARM_LG_CAF_LOCK,
-    MM_CAMERA_PARM_INFORM_STARTPRVIEW,
-    MM_CAMERA_PARM_F_NUMBER,
+    MM_CAMERA_PARM_ORIENTATION,
+    MM_CAMERA_PARM_VIDEO_HDR,
+    MM_CAMERA_PARM_SKIN_BEAUTIFICATION,
+    MM_CAMERA_PARM_WATERMARK,
+    MM_CAMERA_PARM_MIRROR,
     MM_CAMERA_PARM_MAX
 } mm_camera_parm_type_t;
 
@@ -614,19 +574,12 @@ typedef enum {
   CAMERA_GET_MAX_NUM_FACES_DECT,
   CAMERA_SET_CHANNEL_STREAM,
   CAMERA_GET_CHANNEL_STREAM,
-  CAMERA_SET_PARM_CID, /*125*/
-  CAMERA_GET_PARM_FRAME_RESOLUTION,
   CAMERA_GET_FACIAL_FEATURE_INFO,
-  CAMERA_SET_CAF_LOCK_CANCEL,
-  CAMERA_GET_PARM_HDR,
-  CAMERA_SET_PARM_CAF_TYPE,
-  CAMERA_GET_PARM_LUX_IDX,
-  CAMERA_GET_PARM_LOW_LIGHT_FOR_ZSL,
-  CAMERA_GET_PARM_AF_STATUS,
-  CAMERA_CHECK_AF_RETRY,
-  CAMERA_SET_LG_CAF_LOCK,
-  CAMERA_SET_INFORM_STARTPREVIEW,
-  CAMERA_GET_PARM_F_NUMBER,
+  CAMERA_SET_ROT_INFO,
+  CAMERA_SET_VIDEO_HDR,
+  CAMERA_SKIN_BEAUTIFICATION,
+  CAMERA_SET_WATERMARK,
+  CAMERA_SET_MIRROR,
   CAMERA_CTRL_PARM_MAX
 } cam_ctrl_type;
 
@@ -898,8 +851,6 @@ typedef enum {
   MM_CAMERA_CTRL_EVT_PREP_SNAPSHOT,
   MM_CAMERA_CTRL_EVT_SNAPSHOT_CONFIG_DONE,
   MM_CAMERA_CTRL_EVT_WDN_DONE, // wavelet denoise done
-  MM_CAMERA_CTRL_EVT_HDR_DONE,
-  MM_CAMERA_CTRL_EVT_AUTO_FOCUS_MOVE,
   MM_CAMERA_CTRL_EVT_ERROR,
   MM_CAMERA_CTRL_EVT_MAX
 }mm_camera_ctrl_event_type_t;
@@ -1000,6 +951,7 @@ typedef struct  {
     struct fd_roi_t roi;
   } e;
 } mm_camera_info_event_t;
+
 
 typedef enum {
   MM_CAMERA_EVT_TYPE_CH,
@@ -1164,6 +1116,11 @@ typedef enum {
   FPS_MODE_AUTO,
   FPS_MODE_FIXED,
 } fps_mode_t;
+
+typedef struct {
+  float min_fps;
+  float max_fps;
+} cam_sensor_fps_range_t;
 
 typedef struct {
   int32_t  buffer[256];       /* buffer to hold data */
