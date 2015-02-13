@@ -200,17 +200,8 @@ def trunc_to_null(s):
 #	info.script.AppendExtra('run_program("/sbin/syspart_select", "switch");');
 
 def FullOTA_PostValidate(info):
-	# add resize2fs to zip file
-	common.ZipWriteStr(info.output_zip, "system/xbin/resize2fs.static",
-                     ""+info.input_zip.read("SYSTEM/xbin/resize2fs.static"))
-
-	# extract resize2fs and set permissions
-	info.script.AppendExtra('package_extract_file("system/xbin/resize2fs.static", "/tmp/resize2fs.static");');
-	info.script.AppendExtra('set_metadata("/tmp/resize2fs.static", "uid", 0, "gid", 0, "mode", 0755);');
 	# run e2fsck
 	info.script.AppendExtra('run_program("/sbin/e2fsck", "-fy", "/dev/block/platform/msm_sdcc.1/by-name/system");');
-	# resize2fs: run and delete
-	info.script.AppendExtra('run_program("/tmp/resize2fs.static", "/dev/block/platform/msm_sdcc.1/by-name/system");');
-	info.script.AppendExtra('delete("/tmp/resize2fs.static");');
-	# run e2fsck
+	# resize2fs and e2fsck again
+	info.script.AppendExtra('run_program("/sbin/resize2fs", "/dev/block/platform/msm_sdcc.1/by-name/system");');
 	info.script.AppendExtra('run_program("/sbin/e2fsck", "-fy", "/dev/block/platform/msm_sdcc.1/by-name/system");');
