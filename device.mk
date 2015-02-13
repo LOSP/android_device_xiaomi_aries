@@ -201,20 +201,12 @@ endif
 
 # GPS configuration
 PRODUCT_COPY_FILES += \
-        device/xiaomi/aries/gps.conf:system/etc/gps.conf
+    $(LOCAL_PATH)/gps/gps.conf:system/etc/gps.conf \
+    $(LOCAL_PATH)/gps/izat.conf:system/etc/izat.conf \
+    $(LOCAL_PATH)/gps/sap.conf:system/etc/sap.conf
 
-# GPS
-PRODUCT_PACKAGES += \
-        libloc_adapter \
-        libloc_eng \
-        libloc_api_v02 \
-        libloc_ds_api \
-        libloc_core \
-        libizat_core \
-        libgeofence \
-        libgps.utils \
-        gps.msm8960 \
-        flp.msm8960
+PRODUCT_PROPERTY_OVERRIDES += \
+    persist.gps.qmienabled=true
 
 PRODUCT_PACKAGES += \
 	bdAddrLoader \
