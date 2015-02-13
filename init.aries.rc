@@ -443,11 +443,17 @@ service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 /mnt/media_rw/usbdisk /s
     class late_start
     disabled
 
-service thermald /system/bin/thermald
+service thermald_h /system/bin/thermald --config /system/etc/thermald_h.conf
     class main
-    group radio system
+    user root
+    group root
 
-service mpdecision /system/bin/mpdecision --no_sleep --avg_comp
+service thermald_l /system/bin/thermald --config /system/etc/thermald_l.conf
+    class main
+    user root
+    group root
+
+service mpdecision /system/bin/mpdecision --avg_comp
     class main
     user root
     group root system
