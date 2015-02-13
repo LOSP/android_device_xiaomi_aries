@@ -108,35 +108,6 @@ PRODUCT_COPY_FILES += \
 	frameworks/native/data/etc/android.hardware.bluetooth_le.xml:system/etc/permissions/android.hardware.bluetooth_le.xml \
 	frameworks/native/data/etc/android.hardware.ethernet.xml:system/etc/permissions/android.hardware.ethernet.xml
 
-PRODUCT_PROPERTY_OVERRIDES += \
-	ro.opengles.version=196608
-
-PRODUCT_PROPERTY_OVERRIDES += \
-	ro.sf.lcd_density=320
-
-# Audio Configuration
-# FIXME: Remove persist.audio.handset.mic and persist.audio.fluence.mode
-#        while switching new audio HAL from legacy HAL
-PRODUCT_PROPERTY_OVERRIDES += \
-	persist.audio.handset.mic.type=digital \
-	persist.audio.dualmic.config=endfire \
-	persist.audio.fluence.voicecall=true \
-	persist.audio.handset.mic=dmic \
-	persist.audio.fluence.mode=endfire \
-	persist.audio.lowlatency.rec=false
-
-
-# Do not power down SIM card when modem is sent to Low Power Mode.
-PRODUCT_PROPERTY_OVERRIDES += \
-	persist.radio.apm_sim_not_pwdn=1
-
-# Ril sends only one RIL_UNSOL_CALL_RING, so set call_ring.multiple to false
-PRODUCT_PROPERTY_OVERRIDES += \
-	ro.telephony.call_ring.multiple=0
-
-#Upto 3 layers can go through overlays
-PRODUCT_PROPERTY_OVERRIDES += persist.hwc.mdpcomp.enable=true
-
 PRODUCT_CHARACTERISTICS := nosdcard
 
 PRODUCT_TAGS += dalvik.gc.type-precise
@@ -179,9 +150,6 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
 	device/xiaomi/aries/init.aries.bt.sh:system/etc/init.aries.bt.sh
 
-PRODUCT_PROPERTY_OVERRIDES += \
-	ro.qualcomm.bt.hci_transport=smd
-
 ifeq ($(findstring tiny, $(TARGET_PRODUCT)),)
 PRODUCT_PACKAGES += \
 	camera.aries \
@@ -205,9 +173,6 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/gps/izat.conf:system/etc/izat.conf \
     $(LOCAL_PATH)/gps/sap.conf:system/etc/sap.conf
 
-PRODUCT_PROPERTY_OVERRIDES += \
-    persist.gps.qmienabled=true
-
 PRODUCT_PACKAGES += \
 	bdAddrLoader \
 	libbt-vendor \
@@ -229,38 +194,13 @@ PRODUCT_PACKAGES += \
 	syspart_select \
 	resize2fs.static
 
-PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
-	rild.libpath=/system/lib/libril-qc-qmi-1.so
-
-PRODUCT_PROPERTY_OVERRIDES += \
-	telephony.lteOnCdmaDevice=0
-
 ifeq ($(findstring tiny, $(TARGET_PRODUCT)),)
 PRODUCT_PROPERTY_OVERRIDES += \
 	drm.service.enabled=true
 endif
 
-PRODUCT_PROPERTY_OVERRIDES += \
-	wifi.interface=wlan0 \
-	wifi.supplicant_scan_interval=15
-
-# Enable AAC 5.1 output
-PRODUCT_PROPERTY_OVERRIDES += \
-    media.aac_51_output_enabled=true
-
-PRODUCT_PROPERTY_OVERRIDES += \
-        debug.egl.recordable.rgba8888=1
-
-PRODUCT_PROPERTY_OVERRIDES += \
-	ro.qc.sensors.wl_dis=true \
-	ro.qualcomm.sensors.smd=true
-
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
 	persist.sys.usb.config=mtp
-
-# Hardware codecs
-PRODUCT_PROPERTY_OVERRIDES += \
-    qcom.hw.aac.encoder=true
 
 PRODUCT_PACKAGES += \
     libOmxAacEnc \
@@ -270,10 +210,6 @@ PRODUCT_PACKAGES += \
 
 # QRNGD
 PRODUCT_PACKAGES += qrngd
-
-# QC Perf
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.vendor.extension_library=/vendor/lib/libqc-opt.so
 
 $(call inherit-product, frameworks/native/build/phone-xhdpi-2048-dalvik-heap.mk)
 
