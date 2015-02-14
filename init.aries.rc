@@ -330,6 +330,67 @@ on charger
     write /sys/devices/system/cpu/cpu2/online 0
     write /sys/devices/system/cpu/cpu3/online 0
 
+# Powersave
+on property:sys.perf.profile=0
+    # CPU
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "powersave"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "powersave"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "powersave"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "powersave"
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 918000
+    # GPU
+    write /sys/devices/platform/kgsl-3d0.0/kgsl/kgsl-3d0/max_gpuclk 200000000
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor "ondemand"
+    # mpdecision: enable
+    start mpdecision
+    # thermald: low
+    stop thermald_h
+    stop thermald_l
+    start thermald_l
+
+# Balanced
+on property:sys.perf.profile=1
+    # CPU
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "ondemand"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "ondemand"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "ondemand"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "ondemand"
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2000000
+    # GPU
+    write /sys/devices/platform/kgsl-3d0.0/kgsl/kgsl-3d0/max_gpuclk 400000000
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor "ondemand"
+    # mpdecision: enable
+    start mpdecision
+    # thermald: low
+    stop thermald_h
+    stop thermald_l
+    start thermald_l
+
+# High performance
+on property:sys.perf.profile=2
+    # mpdecision: disable
+    stop mpdecision
+    # CPU
+    write /sys/devices/system/cpu/cpu0/online 1
+    write /sys/devices/system/cpu/cpu1/online 1
+    write /sys/devices/system/cpu/cpu2/online 1
+    write /sys/devices/system/cpu/cpu3/online 1
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2000000
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 2000000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 2000000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 2000000
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "performance"
+    # GPU
+    write /sys/devices/platform/kgsl-3d0.0/kgsl/kgsl-3d0/max_gpuclk 400000000
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor "performance"
+    # thermald: high
+    stop thermald_h
+    stop thermald_l
+    start thermald_h
+
 on property:init.svc.wpa_supplicant=stopped
     stop dhcpcd
 
