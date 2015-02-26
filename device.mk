@@ -194,12 +194,6 @@ PRODUCT_PACKAGES += \
 	syspart_select \
 	resize2fs.static
 
-# fmradio support
-PRODUCT_PACKAGES += \
-    qcom.fmradio \
-    libqcomfm_jni \
-    FM2
-
 ifeq ($(findstring tiny, $(TARGET_PRODUCT)),)
 PRODUCT_PROPERTY_OVERRIDES += \
 	drm.service.enabled=true

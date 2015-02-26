@@ -79,9 +79,6 @@ af.resampler.quality=255
 # System prop to select MPQAudioPlayer by default on mpq8064
 mpq.audio.decode=true
 
-# FMRadio
-ro.fm.transmitter=false
-
 #
 # system prop for opengles version
 #
